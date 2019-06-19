@@ -61,7 +61,7 @@ library(doParallel)
 #see great vignette: https://cran.r-project.org/web/packages/pscl/vignettes/countreg.pdf
 library("countreg")
 
-source("C:/Matias/Analyses/SOURCE_SCRIPTS/Smart_par.R")
+source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Smart_par.R")
 #Define user
 User="Matias"
 #User="Dany"
@@ -69,8 +69,8 @@ User="Matias"
 if(User=="Matias")
 {
   source("C:/Matias/R/HighstatLibV6.R")  #for corvif ()
-  source("C:/Matias/Analyses/SOURCE_SCRIPTS/Plot.Map.R")
-  source("C:/Matias/Analyses/SOURCE_SCRIPTS/Compare.error.structure.R")  
+  source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R")
+  source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Compare.error.structure.R")  
 }
 
 if(User=="Dany")
@@ -85,7 +85,7 @@ if(User=="Dany")
 # -- DATA SECTION --
 
 #Sharks data base 
-if(User=="Matias") source("C:/Matias/Analyses/SOURCE_SCRIPTS/Source_Shark_bio.R")
+if(User=="Matias") source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Source_Shark_bio.R")
 if(User=="Dany") source("C:/Matias/Analyses/SOURCE_SCRIPTS/Source_Shark_bio.R")
 
 
@@ -131,7 +131,7 @@ if(User=="Dany")
 
 Bathymetry=rbind(Bathymetry_120,Bathymetry_138)
 
-if(User=="Matias") source("C:/Matias/Analyses/SOURCE_SCRIPTS/Population dynamics/fn.fig.R")
+if(User=="Matias") source("C:/Matias/Analyses/SOURCE_SCRIPTS/Population dynamics/Git_Population.dynamics/fn.fig.R")
 
 #Genetic tissue in stock
 #library(xlsx)
@@ -1360,7 +1360,7 @@ if(Do.abundance=="YES")
     grid.newpage()
     grid.table(with(dd,table(year,Month)))
     
-    #Cramér's V varies from 0 to 1, with a 1 indicting a perfect association
+    #Cram?r's V varies from 0 to 1, with a 1 indicting a perfect association
     catcorrm <- function(vars, dat) sapply(vars, function(y) sapply(vars, function(x) assocstats(table(dat[,x], dat[,y]))$cramer))
     TAB=catcorrm(vars=c("year","Moon","Month"), dat=dd)
     grid.newpage()
@@ -4066,8 +4066,8 @@ if(Do.abundance=="YES")
     points(d$Mid.Long,d$Mid.Lat,cex=2.5,col=rgb(.5,.5,.5,alph=0.075),pch=19)
     with(Fixed.Stations[1:20,],points(Fix.St.mid.lon,Fix.St.mid.lat,pch=21,bg="white",cex=1.5))
     with(Fixed.Stations[1:20,],text(Fix.St.mid.lon*0.999,Fix.St.mid.lat,Station.no.,pos=2,cex=1.5,col="dodgerblue4"))
-    mtext("Longitude (°E)",1,-1.5,outer=T,cex=2)
-    mtext("Latitude (°S)",2,line=-1.85,outer=T,cex=2)
+    mtext("Longitude (?E)",1,-1.5,outer=T,cex=2)
+    mtext("Latitude (?S)",2,line=-1.85,outer=T,cex=2)
     axis(1,seq(112,120,2),seq(112,120,2),cex.axis=1.25)
     axis(2,seq(-16,-26,-2),seq(16,26,2),las=1,cex.axis=1.25)
     dev.off()
@@ -4320,11 +4320,84 @@ if(Do.abundance=="YES")
     box()
     polygon(x=c(rep(South.WA.long[2],2),rep(South.WA.long[1],2)),y=c(South.WA.lat,rev(South.WA.lat)),lwd=1.5,col=rgb(.4,.2,.2,alpha=.4))
     text(135,-25,("Australia"),col="white", cex=1.35)
-    mtext("Longitude (°E)",side=1,line=1.2,font=1,las=0,cex=1.35,outer=T)
-    mtext("Latitude (°S)",side=2,line=1,font=1,las=0,cex=1.35,outer=T)
+    mtext("Longitude (?E)",side=1,line=1.2,font=1,las=0,cex=1.35,outer=T)
+    mtext("Latitude (?S)",side=2,line=1,font=1,las=0,cex=1.35,outer=T)
     dev.off() 
   }
   
+  do.GitHub.map="NO"
+  if(do.GitHub.map=="YES")  
+  {
+    #North West WA
+    library(rgdal)
+    source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R")
+    
+    JA_Northern_Shark=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/JA_Northern_Shark.shp", layer="JA_Northern_Shark") 
+    WA_Northern_Shark=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/NorthCoastShark_s43.shp", layer="NorthCoastShark_s43") 
+    WA_Northern_Shark_2=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/NorthWestCoastShark_s43.shp", layer="NorthWestCoastShark_s43") 
+    
+    
+    SCALER=3
+    LEG=c(as.character(5),"",as.character(10),"",as.character(20))
+    
+    fn.scale=function(x,max,scaler) ((x/max)^0.5)*scaler
+    
+    South.WA.long=c(109,129)
+    South.WA.lat=c(-26,-12)
+    Xlim=South.WA.long
+    Ylim=South.WA.lat
+    Col.Ning="grey80"
+    Col.NSF="grey50"
+    Col.land="grey95"
+    
+    fn.fig("Paper/Figure 1_GitHub",2400,2400)
+    par(mfcol=c(1,1),mar=c(1,1,.5,.5),oma=c(3,3,1,.1),las=1,mgp=c(.04,.6,0))
+    
+    #Add Australia and Closures
+    plot(1,xlim=c(Xlim[1]*0.9995,Xlim[2]*.9975),ylim=Ylim,xlab="",ylab="",axes=F,main="")
+    
+    #NSF
+    plot(WA_Northern_Shark,add=T,col=Col.Ning)
+    
+    #WANCS open
+    polygon(c(123.75,123.75,122.0204,121.4045,120,
+              120,122.3488,123.211, 122.9647),
+            c(-16.33,-11.50386,-11.65960,-12.39937,-12.63298,
+              -17.96708,-17.96708,-17.69453,-16.33),col=Col.NSF)
+    
+    #WANCS closure
+    plot(JA_Northern_Shark,add=T,col=Col.NSF)
+    text(116.8,-16.75,"Closed",srt=45,cex=1.1)
+    text(117.5,-18,"since 2005",srt=45,cex=1.1)
+    #Ningaloo closure
+    plot(WA_Northern_Shark_2,add=T,col=Col.Ning)
+    text(111.1,-21.75,"Closed",srt=65,cex=1.1)
+    text(112,-23,"since 1993",srt=65,cex=1.1)
+    
+    polygon(WAcoast$Longitude,WAcoast$Latitude, col=Col.land)
+    box()
+    
+    #Stations
+    ddd=Fixed.Stations
+    names(ddd)[match('Station.no.',names(ddd))]='STNum'
+    with(subset(ddd,!STNum=='additional'),points(Long.1,Lat.1,pch=21,bg="black",col=1))
+    axis(2,seq(round(Ylim[1]),round(Ylim[2]),2),-seq(round(Ylim[1]),round(Ylim[2]),2),cex.axis=1.25)
+    axis(side = 1, seq(South.WA.long[1],South.WA.long[2],2), 
+         labels =seq(South.WA.long[1],South.WA.long[2],2), tck = -.015,cex.axis=1.25)
+    
+    
+    # #Australia
+    par(fig = c(.6, .9, .1, .4), mar=c(0,0,0,0), new=TRUE)
+    OZ.lat=c(-44.5,South.WA.lat[2]);OZ.long=c(South.WA.long[1],155)
+    plotMap(worldLLhigh, xlim=OZ.long,ylim=OZ.lat,plt = c(.1, 1, 0.075, 1),
+            col='black',tck = 0.025, tckMinor = 0.0125, xlab="",ylab="",axes=F)
+    box()
+    polygon(x=c(rep(South.WA.long[2],2),rep(South.WA.long[1],2)),y=c(South.WA.lat,rev(South.WA.lat)),lwd=1.5,col=rgb(.4,.2,.2,alpha=.4))
+    text(135,-25,("Australia"),col="white", cex=1.35)
+    mtext(expression(paste("Longitude (",degree,"E)",sep="")),side=1,line=1.2,font=1,las=0,cex=1.35,outer=T)
+    mtext(expression(paste("Latitude (",degree,"S)",sep="")),side=2,line=1,font=1,las=0,cex=1.35,outer=T)
+    dev.off() 
+  }
 
   #Figure S1.   
   Ymax.vec=rep(.3,N.species)
@@ -4400,7 +4473,7 @@ if(Do.abundance=="YES")
     if(!is.null(LGN))legend("bottomleft",LGN,bty='n',cex=1.25)
   }
   mtext("Relative CPUE",2,outer=T,line=-0.5,cex=1.5,las=3)
-  mtext("Latitude (°S)",1,outer=T,line=0.5,cex=1.5)
+  mtext("Latitude (?S)",1,outer=T,line=0.5,cex=1.5)
   dev.off()
   
 
@@ -4611,7 +4684,7 @@ if(Do.abundance=="YES")
     Store.SEX.show.lat=Store.SEX[match(Lat.sp,names(Store.SEX))]
     fn.plt.pred.lat.z.sx.size(D=Store.SEX.show.lat,varX="LAT.seq",
                               varY="LAT.preds",REVRT="YES",CL=1:15,XLIM=c(17,25),YLIM=c(0,1))
-    mtext("Latitude (°S)",1,line=1.9,cex=1.5)
+    mtext("Latitude (?S)",1,line=1.9,cex=1.5)
     
     #Proportion of males changes with depth
     Store.SEX.show.depth=Store.SEX[match(depth.sp,names(Store.SEX))]
@@ -4654,7 +4727,7 @@ if(Do.abundance=="YES")
     mtext(LGn,3,line=.05,cex=1.1)
   }
   mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
-  mtext("Latitude (°S)",1,outer=T,line=0.5,cex=1.5)
+  mtext("Latitude (?S)",1,outer=T,line=0.5,cex=1.5)
   dev.off()
   
   
@@ -4912,7 +4985,7 @@ if(Do.ecosystems=="YES")
                    PredictorS=Predictors,MAIN=Main.title[i],log.var=Res.var.in.log[i],
                    Cx=1.5,YLIM=NULL,Cx.axs=1.5)
     })
-    mtext("Latitude (°S)",1,outer=T,cex=1.5,line=1.5)
+    mtext("Latitude (?S)",1,outer=T,cex=1.5,line=1.5)
     mtext("Relative value",2,-.75,outer=T,cex=1.5,las=3)
     dev.off()
   }
