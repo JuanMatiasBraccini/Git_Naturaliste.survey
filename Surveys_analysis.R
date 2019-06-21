@@ -25,7 +25,7 @@
 
 
 rm(list=ls(all=TRUE))
-require(lubridate)  #for dates manipulation
+library(lubridate)  #for dates manipulation
 library(geosphere)
 library(ggplot2)
 library(vcd)    #correlation between factors
@@ -33,13 +33,14 @@ library(pscl)  #zero-inflated models
 library(MCMCglmm) #zero-inflated models
 library(glmmADMB) #zero-inflated models
 library(tweedie)
-require(statmod) # Provides  tweedie  family functions
+library(statmod) # Provides  tweedie  family functions
 library(bbmle)  #AIC table
 library(lmtest) #likelihood ratio tests
 library(mgcv)
+library(zigam)
 library(PBSmapping)
 data(worldLLhigh)
-require(plotrix) #multihistogram
+library(plotrix) #multihistogram
 library(gplots)  #annotated boxplot
 #install.packages("C:/Matias/R/COZIGAM_2.0-3.tar.gz",type="source")
 #library(COZIGAM)
@@ -47,7 +48,7 @@ library(mvtnorm)      #for multivariate normal pdf
 library(caret)
 library(ReporteRs)
 library(gridExtra)
-library(cede)
+#library(cede)
 library(tidyr)
 library(dplyr)
 library(mpath)
@@ -55,13 +56,13 @@ library(glmulti)  #model selection
 library(emmeans)
 library(foreach)
 library(doParallel)
-
+library(geosphere)
+library(imputeTS)
 
 #install.packages("countreg", repos = "http://R-Forge.R-project.org")
 #see great vignette: https://cran.r-project.org/web/packages/pscl/vignettes/countreg.pdf
 library("countreg")
 
-source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Smart_par.R")
 #Define user
 User="Matias"
 #User="Dany"
@@ -80,6 +81,11 @@ if(User=="Dany")
   source("C:/Matias/Analyses/SOURCE_SCRIPTS/Compare.error.structure.R")  
 }
 
+if(User=="Matias")
+{
+  source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_Population.dynamics/fn.fig.R")
+  source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Smart_par.R")
+}
 
 
 # -- DATA SECTION --
@@ -130,8 +136,6 @@ if(User=="Dany")
 }
 
 Bathymetry=rbind(Bathymetry_120,Bathymetry_138)
-
-if(User=="Matias") source("C:/Matias/Analyses/SOURCE_SCRIPTS/Population dynamics/Git_Population.dynamics/fn.fig.R")
 
 #Genetic tissue in stock
 #library(xlsx)
@@ -497,6 +501,15 @@ Table.1[is.na(Table.1)]=""
 names(Table.1)[match("LL.Numbers",names(Table.1))]=paste("LL.Numbers_",Yrs.LL[1],"-",Yrs.LL[length(Yrs.LL)],sep="")
 names(Table.1)[match("DL.Numbers",names(Table.1))]=paste("DL.Numbers_",Yrs.DL[1],"-",Yrs.DL[length(Yrs.DL)],sep="")
 
+Req.shrk=vapply(strsplit(Prop.requiem.sharks$SCIENTIFIC_NAME, " ", fixed = TRUE), "[", "", 1)
+Req.shrk=c(Table.1$Species[which(Req.shrk=="Carcharhinus")],"MI","TG","SE","LE","TA","GB")
+Prop.requiem.sharks=Table.1%>%mutate(Requiem=ifelse(Species%in%Req.shrk,"YES","NO")) %>%
+                              rename(N='LL.Numbers_2001-2017')%>%
+                              group_by(Requiem) %>%
+                              summarise(N = sum(N)) %>%
+                              mutate(prop=N/sum(N)) %>%
+                              as.data.frame()
+                              
 
 Table.1.scalies=merge(LL.species.scalies$Table.species,LL.size.scalies,by="SPECIES")
 names(Table.1.scalies)[-ID]=paste("LL.",names(Table.1.scalies)[-ID],sep="")
@@ -739,7 +752,7 @@ add.Sheet.no$SHEET_NO=as.character(add.Sheet.no$SHEET_NO)
 Unk.Temp=rbind(Unk.Temp,add.Sheet.no)
 Unk.Temp=Unk.Temp[order(Unk.Temp$SHEET_NO),]
 
-library(imputeTS)
+
 Unk.Temp$TEMP1=na.interpolation(ts(Unk.Temp$TEMP))
 DATA=merge(DATA,subset(Unk.Temp,select=c(SHEET_NO,TEMP1)),by='SHEET_NO')
 
@@ -917,7 +930,6 @@ if(Do.abundance=="YES")
     prop.with.catch=round(100*sum(TABLE$Catch.Target>0)/length(TABLE$Catch.Target),0)
     return(list(dat=TABLE,prop.ktch=prop.with.catch))
   }
-  
   for ( i in 1:N.species)
   {
     dum=Effort.data.fun(TARGETS[i],SUBSET="NO")
@@ -1148,7 +1160,7 @@ if(Do.abundance=="YES")
     if(is.null(breaks)) breaks=unique(quantile(x))
     x=cut(x,breaks,include.lowest=T,right=F)
     levels(x)=paste(breaks[-length(breaks)],ifelse(diff(breaks)>1,
-                                                   c(paste('-',breaks[-c(1,length(breaks))]-1,sep=''),'+'),''),sep='')
+                    c(paste('-',breaks[-c(1,length(breaks))]-1,sep=''),'+'),''),sep='')
     return(x)
   }
   
@@ -1280,7 +1292,7 @@ if(Do.abundance=="YES")
     {
       pdf(paste(hndl.expl,"/boxplot_",TARGETS.name[i],".pdf",sep=""))
       d=subset(DATA.list[[i]],FixedStation=="YES")
-      fn.plt(tapsum(d,"Catch.Target","year","Month",div=div),"Catch","month")
+      #fn.plt(tapsum(d,"Catch.Target","year","Month",div=div),"Catch","month")
       par(mfcol=c(2,2),mar=c(2,2,2,.1))
       barplot(table(trunc(d$BOTDEPTH/2) * 2),main="2 m bin")
       barplot(table(trunc(d$BOTDEPTH/5) * 5),main="5 m bin")
@@ -1360,17 +1372,80 @@ if(Do.abundance=="YES")
     grid.newpage()
     grid.table(with(dd,table(year,Month)))
     
-    #Cram?r's V varies from 0 to 1, with a 1 indicting a perfect association
+      # calculate Cramer's V varies from 0 to 1, with a 1 indicting a perfect association
     catcorrm <- function(vars, dat) sapply(vars, function(y) sapply(vars, function(x) assocstats(table(dat[,x], dat[,y]))$cramer))
     TAB=catcorrm(vars=c("year","Moon","Month"), dat=dd)
     grid.newpage()
     grid.table(TAB)
     dev.off()
     
-    
-  }
+    #no linear relation between predictors and response
+    fn.expl.non.linear=function(d,VARS,NamE)
+    {
+      d=d %>% filter(BOTDEPTH<210 & FixedStation=="YES" & Catch.Target>0 ) %>%
+        select(VARS) %>%
+        mutate(Mid.Lat=abs(Mid.Lat),
+               log.Ef=log(SOAK.TIME*N.hooks.Fixed),
+               year=factor(year,levels=unique(sort(year))))
+      par(mfcol=c(3,1),mar=c(2.5,2.2,1,.1),oma=c(1,1,1,1),mgp=c(1.5,.5,0),cex.lab=1.25)
+      with(d,
+           {
+             boxplot(Catch.Target~as.factor(Month),col="grey80",xlab="Month")
+             boxplot(Catch.Target~as.factor(10*round(BOTDEPTH/10)),col="grey80",xlab="Depth")
+             boxplot(Catch.Target~as.factor(round(abs(Mid.Lat))),col="grey80",xlab="Lat")
+           })
+      mtext(NamE,3,outer=T,line=-1)
+    }
+    pdf(paste(hndl.expl,"Non.linear.pattern.pdf",sep="/"))
+    for(i in Species.cpue)fn.expl.non.linear(d=DATA.list[[i]],VARS=c(VARIABLES,"Month"),NamE=names(DATA.list)[i])
+    dev.off()
+   }
+  
+  Species.cpue=1:N.species #define species vector
   
   
+  ##############
+  #ACA  
+  Res.var="Catch.Target"
+  Offset='offset(log.Ef)'
+  
+  #Select terms and error structure
+  cl <- makeCluster(detectCores()-1)
+  registerDoParallel(cl)
+  getDoParWorkers()
+  system.time({Select.term_error=foreach(i=Species.cpue,.packages=c('dplyr','doParallel')) %dopar%
+    {
+      if(names(DATA.list)[i]=="Sandbar shark")
+      {
+        Terms=c("year","Month","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","Moon")
+      }else
+      {
+        Terms=c("year","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","Moon")
+      }
+      d=DATA.list[[i]] %>% filter(BOTDEPTH<210 & FixedStation=="YES") %>%
+        mutate(Mid.Lat=abs(Mid.Lat),
+               log.Ef=log(SOAK.TIME*N.hooks.Fixed),
+               year=factor(year,levels=unique(sort(year))),
+               Month=factor(Month,levels=unique(sort(Month))),
+               Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
+      tested.mods=foreach(t =1:length(Terms),.errorhandling='remove',.packages=c('zigam','mgcv','doParallel'))%dopar%
+        {
+          FRMLA=formula(paste(Res.var,paste(c(Terms[1:t],Offset),collapse="+"),sep="~"))
+          Gam.Pois=gam(FRMLA,data=d,method = "REML",family=poisson)
+          Gam.Nb=gam(FRMLA,data=d,method = "REML",family = nb)
+          Gam.ZIP=zipgam(lambda.formula=FRMLA,pi.formula=FRMLA,data=d)
+          Gam.ZINB=zinbgam(mu.formula=FRMLA,pi.formula=FRMLA,data=d)
+          dummy=list(Pois=Gam.Pois,NB=Gam.Nb,ZIP=Gam.ZIP,ZINB=Gam.ZINB)
+          return(dummy)
+        }
+      for(t in 1:length(Terms))names(tested.mods)[t]=paste(Terms[1:t],collapse="+")
+      return(tested.mods)
+    }})    #takes 40 seconds
+  names(Select.term_error)=names(DATA.list)
+  stopCluster(cl) 
+  
+  
+  ##########
   # Set up different distribution function
   #Poisson and NB
   Count.Pois.fn=function(DAT,FORMULA) Pois=glm(FORMULA,data=DAT,family="poisson")
@@ -1400,13 +1475,13 @@ if(Do.abundance=="YES")
   Hurdle.Pois.fn=function(DAT,FORMULA) Hurdle.Pois = hurdle(FORMULA, data = DAT , dist="poisson")
   Hurdle.NB.fn=function(DAT,FORMULA) if(!is.null(FORMULA))Hurdle.NB = hurdle(FORMULA, data = DAT , dist="negbin")
   
-  
+  #ACA
   #Fit all model structures to all species
   Preds=c("year","Mid.Lat","BOTDEPTH")
   VARIABLES=c("Catch.Target",Preds,"N.hooks.Fixed","SOAK.TIME")
   names(Preds)=c("Cat","Cont","Cont")  
   
-  Species.cpue=1:N.species
+  
   
 
   #1.11.2. Select terms for each error structure
@@ -3356,7 +3431,7 @@ if(Do.abundance=="YES")
 
 
 
-#2. Multivariate analysis and Ecosystem indicators   MISSIBNG:  USE Fixed Stations only!
+#2. Multivariate analysis and Ecosystem indicators   MISSING:  USE Fixed Stations only!
 hndl.eco="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Ecosystems/"
 
 DATA.eco=subset(DATA,Month%in%These.Months & Taxa=="Elasmobranch" & BOTDEPTH<500 & FixedStation=="YES" )
@@ -3398,7 +3473,6 @@ DATA.eco$year=as.factor(DATA.eco$year)
 for(n in 1:length(num.vars)) DATA.eco[,match(num.vars[n],names(DATA.eco))]=as.numeric(as.character(DATA.eco[,match(num.vars[n],names(DATA.eco))]))
 DATA.eco$Effort=with(DATA.eco,N.hooks*SOAK.TIME)
 
-
 #Aggreate shots by station
 #note: aggregate by Station-year
 Table.stations.per.year=with(DATA.eco[!duplicated(DATA.eco$SHEET_NO),],table(year,Station.no.))  #unbalanced design    
@@ -3425,15 +3499,12 @@ DATA.eco$BOTDEPTH.mean=round(DATA.eco$BOTDEPTH.mean)
 Numbers.Station.year=aggregate(Number~Station.no.+year+SPECIES+COMMON_NAME+SCIENTIFIC_NAME+
        +Mid.Lat.mean+Mid.Long.mean+BOTDEPTH.mean+Effort.statn_year,DATA.eco,sum)
 
-
-
 # #keep species occurring in >0.1%
 # Tab.sp=table(Numbers.Station.year$COMMON_NAME)
 # Tab.sp=Tab.sp/sum(Tab.sp)
 # Tab.sp=round(100*Tab.sp,2)
 # Tab.sp=Tab.sp[Tab.sp>=0.1]
 # Numbers.Station.year=subset(Numbers.Station.year,COMMON_NAME%in%names(Tab.sp))
-
 
 #See spatial cpue of species ( in numbers per 1000 hooks)
 Numbers.Station.year$cpue=1000*with(Numbers.Station.year,Number/Effort.statn_year)
@@ -3444,8 +3515,6 @@ smart.par(n.plots=length(Unik.sp),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7
 for(sp in 1:length(Unik.sp)) with(subset(Dist.sptl,COMMON_NAME==Unik.sp[sp]),plot(Mid.Long.mean,Mid.Lat.mean,
    main=Unik.sp[sp],pch=19,col=2,cex.main=.85,cex=cpue/max(cpue)*3,ylab="",xlab="",
    ylim=range(Dist.sptl$Mid.Lat.mean),xlim=range(Dist.sptl$Mid.Long.mean)))
-
-#ACA: missing: go thru with Corey, 
 
 #2.1 Multivariate
   #2.1. Classic
@@ -3462,7 +3531,6 @@ if(Do.multivariate=="YES")
                                    Predictors=Predictors,IDVAR=IDVAR,
                                    Formula=formula("d.res.var~."),DataSets=DataSets)
 }               
-
 
   #2.2 Multivariate glm
 if(Do.multivariate.glm=="YES")
@@ -3547,8 +3615,6 @@ if(Do.multivariate.glm=="YES")
   STore.multi.var=Dat
   for(s in 1:length(STore.multi.var)) STore.multi.var[[s]]=fn.multivar(d=Dat[[s]],FORMULA.mvglm=Formula.mvglm)  
 }
-
-
 
 #2.2 Ecosystems indicators
 if(Do.ecosystems=="YES")
@@ -3954,7 +4020,6 @@ if(Do.ecosystems=="YES")
   }
   
 }
-
 
 
 
