@@ -892,10 +892,15 @@ if(Do.abundance=="YES")
   DATA$Method=as.character(DATA$Method)
   Yr.Method=with(DATA,table(Method,year,useNA="ifany"))
   
+  #add Temperature residuals to remove correlation between Temp and Month
+  DATA=DATA%>%group_by(Month,year)%>%
+    mutate(Temp.res=TEMP1/mean(TEMP1,na.rm=T))%>%
+    as.data.frame()
+  
   # Select relevant variables
   THESEVARS=c("SHEET_NO","LINE_NO","date","Month","year","BOAT","BOTDEPTH","depth.bin",
               "Moon","SOI","Freo","BLOCK","Mid.Lat","Mid.Long","N.hooks","TEMP1",
-              "TEMP1.bin","Mid.Lat.bin",
+              "TEMP1.bin","Temp.res","Mid.Lat.bin",
               "N.hooks.Fixed","SOAK.TIME","Method","FixedStation","Station.no.")
   
   #1.6    Construct wide database for analysis
@@ -1402,11 +1407,7 @@ if(Do.abundance=="YES")
    }
   
   Species.cpue=1:N.species #define species vector
-  
-  
-  ##############
-  #ACA  sss
-  Res.var="Catch.Target"
+  Res.var="Catch.Target"   #define response var and offset
   Offset='offset(log.Ef)'
   
   #Select terms and error structure
@@ -1417,10 +1418,10 @@ if(Do.abundance=="YES")
     {
       if(names(DATA.list)[i]=="Sandbar shark")
       {
-        Terms=c("year","Month","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","Moon")
+        Terms=c("year","Month","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","s(Temp.res,k=3)","Moon")
       }else
       {
-        Terms=c("year","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","Moon")
+        Terms=c("year","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","s(Temp.res,k=3)","Moon")
       }
       d=DATA.list[[i]] %>% filter(BOTDEPTH<210 & FixedStation=="YES") %>%
         mutate(Mid.Lat=abs(Mid.Lat),
@@ -1440,9 +1441,100 @@ if(Do.abundance=="YES")
         }
       for(t in 1:length(Terms))names(tested.mods)[t]=paste(Terms[1:t],collapse="+")
       return(tested.mods)
-    }})    #takes 40 seconds
+    }})    #takes 50 seconds
   names(Select.term_error)=names(DATA.list)
   stopCluster(cl) 
+  
+  #   1. Select best model terms (i.e. model structure)
+  Select.best.modl.str=function(d)
+  {
+    TeRms=names(d)
+    Dev.Exp=as.data.frame(matrix(NA,nrow=length(TeRms),ncol=1+length(names(d[[1]]))))
+    colnames(Dev.Exp)=c("Term",names(d[[1]]))
+    for(i in 1:nrow(Dev.Exp))
+    {
+      n=which(strsplit(TeRms[i], "")[[1]]=="+")
+      if(length(n)==0)
+      {
+        Nme=TeRms[i]
+      }else
+        Nme=substr(TeRms[i],n[length(n)]+1,1000)
+      Dev.Exp$Term[i]=Nme
+    }
+    AiC=Dev.Exp
+    
+    for(t in 1:nrow(Dev.Exp))
+    {
+      id=match(names(d[[t]]),names(Dev.Exp))
+      for(x in 1:length(id))
+      {
+        if(class(d[[t]][[x]])[1]%in%c("zinbgam","zipgam"))
+        {
+          Dev.Exp[t,id[x]]=with(d[[t]][[x]][[1]],(null.deviance-deviance)/null.deviance)*100
+          AiC[t,id[x]]=d[[t]][[x]][[1]]$aic
+        }else
+        {
+          Dev.Exp[t,id[x]]=with(d[[t]][[x]],(null.deviance-deviance)/null.deviance)*100
+          AiC[t,id[x]]=d[[t]][[x]]$aic
+        }
+      }
+    }
+    return(list(AIC=AiC,Deviance.exp=Dev.Exp))
+  }
+  SLCT.TRM=vector('list',length(Species.cpue))
+  names(SLCT.TRM)=names(DATA.list)
+  for(i in Species.cpue) SLCT.TRM[[i]]=Select.best.modl.str(d=Select.term_error[[i]])
+  AIC.terms=do.call(rbind,lapply(SLCT.TRM, `[[`, 1))
+  Resid.deviance.terms=do.call(rbind,lapply(SLCT.TRM, `[[`, 2))
+  write.csv(AIC.terms,paste(getwd(),"/Model selection/AIC.terms.csv",sep=''))
+  write.csv(Resid.deviance.terms,paste(getwd(),"/Model selection/Resid.deviance.terms.csv",sep=''))
+  Best.SLCT.TRM=SLCT.TRM
+  for(i in Species.cpue)
+  {
+    d=Best.SLCT.TRM[[i]]$Deviance.exp
+    Best.terms=vector('list',ncol(d)-1)
+    names(Best.terms)=colnames(d)[-1]
+    for(p in 1:length(Best.terms))
+    {
+      d1=d[,c(1,p+1)]%>%mutate(Prev=lag(d[,p+1],1),
+                               Exp.per=d[,p+1]-Prev,
+                               Exp.per=ifelse(is.na(Exp.per),10,Exp.per))
+      Best.terms[[p]]=d1$Term[which(d1$Exp.per>2)]
+    }
+    Best.SLCT.TRM[[i]]=Best.terms
+  }
+  
+  #   2. Select best error 
+  cl <- makeCluster(detectCores()-1)
+  registerDoParallel(cl)
+  getDoParWorkers()
+  system.time({Select.error=foreach(i=Species.cpue,.packages=c('zigam','mgcv','dplyr','doParallel')) %dopar%
+    {
+      Terms=Best.SLCT.TRM[[i]]
+      d=DATA.list[[i]] %>% filter(BOTDEPTH<210 & FixedStation=="YES") %>%
+        mutate(Mid.Lat=abs(Mid.Lat),
+               log.Ef=log(SOAK.TIME*N.hooks.Fixed),
+               year=factor(year,levels=unique(sort(year))),
+               Month=factor(Month,levels=unique(sort(Month))),
+               Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
+      Gam.Pois=gam(formula(paste(Res.var,paste(c(Terms$Pois,Offset),collapse="+"),sep="~")),
+                   data=d,method = "REML",family=poisson)
+      Gam.Nb=gam(formula(paste(Res.var,paste(c(Terms$NB,Offset),collapse="+"),sep="~")),
+                 data=d,method = "REML",family = nb)
+      Gam.ZIP=zipgam(lambda.formula=formula(paste(Res.var,paste(c(Terms$ZIP,Offset),collapse="+"),sep="~")),
+                     pi.formula=formula(paste(Res.var,paste(c(Terms$ZIP,Offset),collapse="+"),sep="~")),
+                     data=d)
+      Gam.ZINB=zinbgam(mu.formula=formula(paste(Res.var,paste(c(Terms$ZINB,Offset),collapse="+"),sep="~")),
+                       pi.formula=formula(paste(Res.var,paste(c(Terms$ZINB,Offset),collapse="+"),sep="~")),
+                       data=d)
+      dummy=list(Pois=Gam.Pois,NB=Gam.Nb,ZIP=Gam.ZIP,ZINB=Gam.ZINB)
+      return(dummy)
+    }})    #takes 20 seconds
+  names(Select.error)=names(DATA.list)
+  stopCluster(cl) 
+  #ACA 
+  
+  
   
   
   ##########
@@ -1475,15 +1567,11 @@ if(Do.abundance=="YES")
   Hurdle.Pois.fn=function(DAT,FORMULA) Hurdle.Pois = hurdle(FORMULA, data = DAT , dist="poisson")
   Hurdle.NB.fn=function(DAT,FORMULA) if(!is.null(FORMULA))Hurdle.NB = hurdle(FORMULA, data = DAT , dist="negbin")
   
-  #ACA
   #Fit all model structures to all species
   Preds=c("year","Mid.Lat","BOTDEPTH")
   VARIABLES=c("Catch.Target",Preds,"N.hooks.Fixed","SOAK.TIME")
   names(Preds)=c("Cat","Cont","Cont")  
   
-  
-  
-
   #1.11.2. Select terms for each error structure
   if(Select.term=="YES")
   {
