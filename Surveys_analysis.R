@@ -155,47 +155,34 @@ bySEX="YES"  #control if size frequency separated by sex or not
 
 #control if doing abundance analysis
 Do.abundance="YES"
-
+do.GAM="YES"  #define if using GAM or GLM approach
+do.GLM="NO"
 First.LL.yr=2001
 These.Months=5:8
-
 explore.cpue="NO"
+Select.term="NO"  #Run if need to select terms, otherwise skip to next point
+Select.error="NO"  #Run if selecting best error structure
+Select.error.AIC="NO"
+Do.K.fold.test="NO"  #control if doing k fold test
+check.GAM="NO"
+do.like.ratio.test="NO"  #see significance of each term (anova doesn't work)
+do.MC="NO"  #get confidence bounds thru MC
+niter=1000  #Number of iterations
+do.boot="NO"  #get confidence bounds thru bootstrapping
+n.boot=2e3   #Number of bootstrap iterations (for some species boot dat is rejected so bumped up iterations)
+Do.tiff="NO"    #select figure extension
+Do.jpeg="YES"
 
 #control if doing sex ratio anlysis
 do.sex.ratio="NO"
-
-#control if doing ecosystem indicators
-Do.ecosystems="NO"
 
 #control if doing multivariate analysis
 Do.multivariate="NO"
 Do.multivariate.glm="NO"
 
-Select.term="NO"  #Run if need to select terms, otherwise skip to next point
-#Select.term="YES"
-
-Select.error="NO"  #Run if selecting best error structure
-#Select.error="YES"
-
-Select.error.AIC="NO"
-
-Do.K.fold.test="NO"  #control if doing k fold test
-check.GAM="NO"
-
-do.like.ratio.test="NO"  #see significance of each term (anova doesn't work)
-
-
-do.MC="NO"  #get confidence bounds thru MC
-niter=1000  #Number of iterations
-
-
-do.boot="NO"  #get confidence bounds thru bootstrapping
-n.boot=2e3   #Number of bootstrap iterations (for some species boot dat is rejected so bumped up iterations)
-
-
-
-Do.tiff="NO"    #select figure extension
-Do.jpeg="YES"
+#control if doing ecosystem indicators
+Do.ecosystems="NO"
+if(Do.multivariate=="YES") Do.ecosystems="YES"
 
 
 #species selection
@@ -1168,9 +1155,50 @@ if(Do.abundance=="YES")
                     c(paste('-',breaks[-c(1,length(breaks))]-1,sep=''),'+'),''),sep='')
     return(x)
   }
+  fn.nmnl=function(dat,REL)
+  {
+    dat$cpue=with(dat,Catch.Target/(N.hooks.Fixed*SOAK.TIME)) 
+    TT=with(subset(dat,cpue>0),table(year))
+    dat=subset(dat,year%in%names(TT))
+    
+    d = dat %>%
+      group_by(year) %>%
+      summarise(n = length(cpue),
+                m = length(cpue[cpue>0]),
+                mean.lognz = mean(log(cpue[cpue>0])),
+                sd.lognz = sd(log(cpue[cpue>0]))) %>%
+      as.data.frame
+    d$sd.lognz=ifelse(is.na(d$sd.lognz),0,d$sd.lognz)
+    
+    d=d%>%
+      mutate(p.nz = m/n,
+             theta = log(p.nz)+mean.lognz+sd.lognz^2/2,
+             c = (1-p.nz)^(n-1),
+             d = 1+(n-1)*p.nz,
+             vartheta = ((d-c)*(1-c*d)-m*(1-c)^2)/(m*(1-c*d)^2)+
+               sd.lognz^2/m+sd.lognz^4/(2*(m+1)),
+             mean = exp(theta),
+             lowCL = exp(theta - 1.96*sqrt(vartheta)),
+             uppCL = exp(theta + 1.96*sqrt(vartheta))) 
+    
+    if(REL=="YES")
+    {
+      Mn=mean(d$mean,na.rm=T)
+      d$mean=d$mean/Mn
+      d$low95=d$lowCL/Mn
+      d$up95=d$uppCL/Mn
+    }
+    all.yrs=seq(YEAR[1],d$year[length(d$year)])
+    msn.yr=all.yrs[which(!all.yrs%in%d$year)]  
+    msn.yr.dummy=d[1:length(msn.yr),]
+    msn.yr.dummy[,]=NA
+    msn.yr.dummy$year=msn.yr
+    d=rbind(d,msn.yr.dummy)
+    d=d[order(d$year),]
+    return(d)
+  }
   
-  
-  #1.11.1. Exploratory analysis
+  #1.11.1. Exploratory analysis 
   if(explore.cpue=="YES")
   {
     library(grid)
@@ -1410,540 +1438,163 @@ if(Do.abundance=="YES")
   Res.var="Catch.Target"   #define response var and offset
   Offset='offset(log.Ef)'
   
-  #Select terms and error structure
-  cl <- makeCluster(detectCores()-1)
-  registerDoParallel(cl)
-  getDoParWorkers()
-  system.time({Select.term_error=foreach(i=Species.cpue,.packages=c('dplyr','doParallel')) %dopar%
-    {
-      if(names(DATA.list)[i]=="Sandbar shark")
-      {
-        Terms=c("year","Month","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","s(Temp.res,k=3)","Moon")
-      }else
-      {
-        Terms=c("year","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","s(Temp.res,k=3)","Moon")
-      }
-      d=DATA.list[[i]] %>% filter(BOTDEPTH<210 & FixedStation=="YES") %>%
-        mutate(Mid.Lat=abs(Mid.Lat),
-               log.Ef=log(SOAK.TIME*N.hooks.Fixed),
-               year=factor(year,levels=unique(sort(year))),
-               Month=factor(Month,levels=unique(sort(Month))),
-               Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
-      tested.mods=foreach(t =1:length(Terms),.errorhandling='remove',.packages=c('zigam','mgcv','doParallel'))%dopar%
-        {
-          FRMLA=formula(paste(Res.var,paste(c(Terms[1:t],Offset),collapse="+"),sep="~"))
-          Gam.Pois=gam(FRMLA,data=d,method = "REML",family=poisson)
-          Gam.Nb=gam(FRMLA,data=d,method = "REML",family = nb)
-          Gam.ZIP=zipgam(lambda.formula=FRMLA,pi.formula=FRMLA,data=d)
-          Gam.ZINB=zinbgam(mu.formula=FRMLA,pi.formula=FRMLA,data=d)
-          dummy=list(Pois=Gam.Pois,NB=Gam.Nb,ZIP=Gam.ZIP,ZINB=Gam.ZINB)
-          return(dummy)
-        }
-      for(t in 1:length(Terms))names(tested.mods)[t]=paste(Terms[1:t],collapse="+")
-      return(tested.mods)
-    }})    #takes 50 seconds
-  names(Select.term_error)=names(DATA.list)
-  stopCluster(cl) 
+  #1.11.2. Select terms and error structure
   
-  #   1. Select best model terms (i.e. model structure)
-  Select.best.modl.str=function(d)
+  if(do.GAM=="YES" & Select.term=="YES")
   {
-    TeRms=names(d)
-    Dev.Exp=as.data.frame(matrix(NA,nrow=length(TeRms),ncol=1+length(names(d[[1]]))))
-    colnames(Dev.Exp)=c("Term",names(d[[1]]))
-    for(i in 1:nrow(Dev.Exp))
-    {
-      n=which(strsplit(TeRms[i], "")[[1]]=="+")
-      if(length(n)==0)
+    cl <- makeCluster(detectCores()-1)
+    registerDoParallel(cl)
+    getDoParWorkers()
+    system.time({Select.term_error=foreach(i=Species.cpue,.packages=c('dplyr','doParallel')) %dopar%
       {
-        Nme=TeRms[i]
-      }else
-        Nme=substr(TeRms[i],n[length(n)]+1,1000)
-      Dev.Exp$Term[i]=Nme
-    }
-    AiC=Dev.Exp
-    
-    for(t in 1:nrow(Dev.Exp))
-    {
-      id=match(names(d[[t]]),names(Dev.Exp))
-      for(x in 1:length(id))
-      {
-        if(class(d[[t]][[x]])[1]%in%c("zinbgam","zipgam"))
+        if(names(DATA.list)[i]=="Sandbar shark")
         {
-          Dev.Exp[t,id[x]]=with(d[[t]][[x]][[1]],(null.deviance-deviance)/null.deviance)*100
-          AiC[t,id[x]]=d[[t]][[x]][[1]]$aic
+          Terms=c("year","Month","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","s(Temp.res,k=3)","Moon")
         }else
         {
-          Dev.Exp[t,id[x]]=with(d[[t]][[x]],(null.deviance-deviance)/null.deviance)*100
-          AiC[t,id[x]]=d[[t]][[x]]$aic
+          Terms=c("year","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","s(Temp.res,k=3)","Moon")
+        }
+        d=DATA.list[[i]] %>% filter(BOTDEPTH<210 & FixedStation=="YES") %>%
+          mutate(Mid.Lat=abs(Mid.Lat),
+                 log.Ef=log(SOAK.TIME*N.hooks.Fixed),
+                 year=factor(year,levels=unique(sort(year))),
+                 Month=factor(Month,levels=unique(sort(Month))),
+                 Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
+        tested.mods=foreach(t =1:length(Terms),.errorhandling='remove',.packages=c('zigam','mgcv','doParallel'))%dopar%
+          {
+            FRMLA=formula(paste(Res.var,paste(c(Terms[1:t],Offset),collapse="+"),sep="~"))
+            Gam.Pois=gam(FRMLA,data=d,method = "REML",family=poisson)
+            Gam.Nb=gam(FRMLA,data=d,method = "REML",family = nb)
+            Gam.ZIP=zipgam(lambda.formula=FRMLA,pi.formula=FRMLA,data=d)
+            Gam.ZINB=zinbgam(mu.formula=FRMLA,pi.formula=FRMLA,data=d)
+            dummy=list(Pois=Gam.Pois,NB=Gam.Nb,ZIP=Gam.ZIP,ZINB=Gam.ZINB)
+            return(dummy)
+          }
+        for(t in 1:length(Terms))names(tested.mods)[t]=paste(Terms[1:t],collapse="+")
+        return(tested.mods)
+      }})    #takes 50 seconds
+    names(Select.term_error)=names(DATA.list)
+    stopCluster(cl) 
+    
+    #  Select best model terms (i.e. model structure)
+    Select.best.modl.str=function(d)
+    {
+      TeRms=names(d)
+      Dev.Exp=as.data.frame(matrix(NA,nrow=length(TeRms),ncol=1+length(names(d[[1]]))))
+      colnames(Dev.Exp)=c("Term",names(d[[1]]))
+      for(i in 1:nrow(Dev.Exp))
+      {
+        n=which(strsplit(TeRms[i], "")[[1]]=="+")
+        if(length(n)==0)
+        {
+          Nme=TeRms[i]
+        }else
+          Nme=substr(TeRms[i],n[length(n)]+1,1000)
+        Dev.Exp$Term[i]=Nme
+      }
+      AiC=Dev.Exp
+      
+      for(t in 1:nrow(Dev.Exp))
+      {
+        id=match(names(d[[t]]),names(Dev.Exp))
+        for(x in 1:length(id))
+        {
+          if(class(d[[t]][[x]])[1]%in%c("zinbgam","zipgam"))
+          {
+            Dev.Exp[t,id[x]]=with(d[[t]][[x]][[1]],(null.deviance-deviance)/null.deviance)*100
+            AiC[t,id[x]]=d[[t]][[x]][[1]]$aic
+          }else
+          {
+            Dev.Exp[t,id[x]]=with(d[[t]][[x]],(null.deviance-deviance)/null.deviance)*100
+            AiC[t,id[x]]=d[[t]][[x]]$aic
+          }
         }
       }
+      return(list(AIC=AiC,Deviance.exp=Dev.Exp))
     }
-    return(list(AIC=AiC,Deviance.exp=Dev.Exp))
-  }
-  SLCT.TRM=vector('list',length(Species.cpue))
-  names(SLCT.TRM)=names(DATA.list)
-  for(i in Species.cpue) SLCT.TRM[[i]]=Select.best.modl.str(d=Select.term_error[[i]])
-  AIC.terms=do.call(rbind,lapply(SLCT.TRM, `[[`, 1))
-  Resid.deviance.terms=do.call(rbind,lapply(SLCT.TRM, `[[`, 2))
-  write.csv(AIC.terms,paste(getwd(),"/Model selection/AIC.terms.csv",sep=''))
-  write.csv(Resid.deviance.terms,paste(getwd(),"/Model selection/Resid.deviance.terms.csv",sep=''))
-  Best.SLCT.TRM=SLCT.TRM
-  for(i in Species.cpue)
-  {
-    d=Best.SLCT.TRM[[i]]$Deviance.exp
-    Best.terms=vector('list',ncol(d)-1)
-    names(Best.terms)=colnames(d)[-1]
-    for(p in 1:length(Best.terms))
-    {
-      d1=d[,c(1,p+1)]%>%mutate(Prev=lag(d[,p+1],1),
-                               Exp.per=d[,p+1]-Prev,
-                               Exp.per=ifelse(is.na(Exp.per),10,Exp.per))
-      Best.terms[[p]]=d1$Term[which(d1$Exp.per>2)]
-    }
-    Best.SLCT.TRM[[i]]=Best.terms
-  }
-  
-  #   2. Select best error 
-  cl <- makeCluster(detectCores()-1)
-  registerDoParallel(cl)
-  getDoParWorkers()
-  system.time({Select.error=foreach(i=Species.cpue,.packages=c('zigam','mgcv','dplyr','doParallel')) %dopar%
-    {
-      Terms=Best.SLCT.TRM[[i]]
-      d=DATA.list[[i]] %>% filter(BOTDEPTH<210 & FixedStation=="YES") %>%
-        mutate(Mid.Lat=abs(Mid.Lat),
-               log.Ef=log(SOAK.TIME*N.hooks.Fixed),
-               year=factor(year,levels=unique(sort(year))),
-               Month=factor(Month,levels=unique(sort(Month))),
-               Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
-      Gam.Pois=gam(formula(paste(Res.var,paste(c(Terms$Pois,Offset),collapse="+"),sep="~")),
-                   data=d,method = "REML",family=poisson)
-      Gam.Nb=gam(formula(paste(Res.var,paste(c(Terms$NB,Offset),collapse="+"),sep="~")),
-                 data=d,method = "REML",family = nb)
-      Gam.ZIP=zipgam(lambda.formula=formula(paste(Res.var,paste(c(Terms$ZIP,Offset),collapse="+"),sep="~")),
-                     pi.formula=formula(paste(Res.var,paste(c(Terms$ZIP,Offset),collapse="+"),sep="~")),
-                     data=d)
-      Gam.ZINB=zinbgam(mu.formula=formula(paste(Res.var,paste(c(Terms$ZINB,Offset),collapse="+"),sep="~")),
-                       pi.formula=formula(paste(Res.var,paste(c(Terms$ZINB,Offset),collapse="+"),sep="~")),
-                       data=d)
-      dummy=list(Pois=Gam.Pois,NB=Gam.Nb,ZIP=Gam.ZIP,ZINB=Gam.ZINB)
-      return(dummy)
-    }})    #takes 20 seconds
-  names(Select.error)=names(DATA.list)
-  stopCluster(cl) 
-  #ACA 
-  
-  
-  
-  
-  ##########
-  # Set up different distribution function
-  #Poisson and NB
-  Count.Pois.fn=function(DAT,FORMULA) Pois=glm(FORMULA,data=DAT,family="poisson")
-  Count.NB.fn=function(DAT,FORMULA) NB=glm.nb(FORMULA, data = DAT)
-  
-  #Zero Inflated
-  ZIP.fn=function(DAT,FORMULA)  ZIP <- zeroinfl(FORMULA, data = DAT, dist = "poisson")
-  ZINB.fn=function(DAT,FORMULA) if(!is.null(FORMULA))ZINB <- zeroinfl(FORMULA, data = DAT, dist = "negbin")
-  
-  #Tweedie
-  Tweedie.fn=function(DAT,FORMULA)
-  {
-    #Tweedie
-    # 1.Find p value thru likelihood profiling
-    #note: expect  xi  about 1.5
-    P.eval=seq(1.1, 1.9, length=9)
-    out <- tweedie.profile(FORMULA,xi.vec=P.eval,data=DAT, do.plot=F)
-    P=out$xi.max
-    
-    # 2.Fit the glm
-    Tweed=glm( FORMULA,data=DAT, family=tweedie(var.power=P, link.power=0) )
-    
-    return(list(Tweed=Tweed))
-  }
-  
-  #Hurdle
-  Hurdle.Pois.fn=function(DAT,FORMULA) Hurdle.Pois = hurdle(FORMULA, data = DAT , dist="poisson")
-  Hurdle.NB.fn=function(DAT,FORMULA) if(!is.null(FORMULA))Hurdle.NB = hurdle(FORMULA, data = DAT , dist="negbin")
-  
-  #Fit all model structures to all species
-  Preds=c("year","Mid.Lat","BOTDEPTH")
-  VARIABLES=c("Catch.Target",Preds,"N.hooks.Fixed","SOAK.TIME")
-  names(Preds)=c("Cat","Cont","Cont")  
-  
-  #1.11.2. Select terms for each error structure
-  if(Select.term=="YES")
-  {
-    fitFun=function(FORMULA, data,...) zeroinfl(FORMULA, data,dist = ErroR)
-    choose.term=function(DAT,FORMULA,ErroR)
-    {
-      id=match(Preds[which(names(Preds)=="Cat")],names(DAT))
-      for(pp in 1:length(id))DAT[,id[pp]]=as.factor(DAT[,id[pp]])
-      DAT$log.Effort=log(DAT$N.hooks.Fixed*DAT$SOAK.TIME)
-      DAT$Mid.Lat=abs(DAT$Mid.Lat)
-      #m1 = zeroinfl(FORMULA, data = DAT, dist = ErroR)
-      #fitbe = be.zeroinfl(m1, data = DAT, dist = ErroR,alpha = 0.01, trace = FALSE)
-      res <- glmulti(FORMULA,data=DAT, level=1,method="h", fitfunction=fitFun,
-                     crit="aicc",plotty = F, report = T)
-      BEST=res@formulas[[1]]
-
-      return(BEST)
-    }
-    choose.term(DAT=subset(DATA.list[[i]],FixedStation=="YES",select=VARIABLES),
-             FORMULA=as.formula(paste("Catch.Target",paste(c(Preds,'offset(log.Effort)'),collapse="+"),sep="~")),
-            ErroR="poisson")
-    
-    #Formulas count
-    Formulas=list(
-      as.formula(Catch.Target ~ year + offset(log.Effort)),
-      as.formula(Catch.Target ~ year + Month + offset(log.Effort)),
-      as.formula(Catch.Target ~ year + Month + BOTDEPTH + offset(log.Effort)),
-      as.formula(Catch.Target ~ year + Month + BOTDEPTH + Moon + offset(log.Effort)),
-      as.formula(Catch.Target ~ year + Month + BOTDEPTH + Moon + Mid.Lat +  offset(log.Effort)))
-    
-    #Formulas zero inflated
-    Formulas.ZI=list(
-      as.formula(Catch.Target ~ year + offset(log.Effort)|year + offset(log.Effort)),
-      as.formula(Catch.Target ~ year + Month + offset(log.Effort)|year + Month + offset(log.Effort)),
-      as.formula(Catch.Target ~ year + Month + BOTDEPTH + offset(log.Effort)|year + Month + BOTDEPTH + offset(log.Effort)),
-      as.formula(Catch.Target ~ year + Month + BOTDEPTH + Moon + offset(log.Effort)|year + Month + BOTDEPTH + Moon+ offset(log.Effort)),
-      as.formula(Catch.Target ~ year + Month + BOTDEPTH + Moon + Mid.Lat +  offset(log.Effort)|year + Month + BOTDEPTH + Moon + Mid.Lat+ offset(log.Effort)))
-    
-    # Formulas.ZI.Du=Formulas.ZI.SH=NULL
-    # Formulas.ZI.SB=list(
-    #   as.formula(Catch.Target ~ year + BOTDEPTH + offset(log.Effort)|year + offset(log.Effort)),
-    #   as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ offset(log.Effort)|year + offset(log.Effort)),
-    #   as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ Mid.Lat+ offset(log.Effort)|year + Mid.Lat+ offset(log.Effort)))
-    # 
-    # Formulas.ZI.Ti=list(
-    #   as.formula(Catch.Target ~ year + Moon+ offset(log.Effort)|year + offset(log.Effort)),
-    #   as.formula(Catch.Target ~ year + Moon+ Mid.Lat+ offset(log.Effort)|year + offset(log.Effort)),
-    #   as.formula(Catch.Target ~ year + Moon+ Mid.Lat+ BOTDEPTH+ offset(log.Effort)|year + offset(log.Effort)))
-    # 
-    # Formulas.ZI.BT=list(
-    #   as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ offset(log.Effort)|year + Moon+ offset(log.Effort)),
-    #   as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ Mid.Lat+ offset(log.Effort)|year + Moon+ offset(log.Effort)))
-    # 
-    # Formulas.ZI.ST=list(
-    #   as.formula(Catch.Target ~ year + BOTDEPTH + offset(log.Effort)|year + offset(log.Effort)),
-    #   as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ Mid.Lat+ offset(log.Effort)|year + Mid.Lat+ offset(log.Effort)))
-    # 
-    # Formulas.ZI.Mi=Formulas.ZI.SB
-    # 
-    # Formulas.ZI=list(Formulas.ZI.Du,Formulas.ZI.SB,Formulas.ZI.Ti,Formulas.ZI.SH,
-    #                  Formulas.ZI.BT,Formulas.ZI.ST,Formulas.ZI.Mi)
-    
-    
-    #Formulas Tweedie
-    Formulas.Twe=Formulas
-    
-    #Formulas Hurdle
-    Formulas.Hu=Formulas.ZI
-    # Formulas.Hu.Du=Formulas.Hu.SH=NULL
-    # Formulas.Hu.SB=Formulas
-    # Formulas.Hu.Ti=list(
-    #   as.formula(Catch.Target ~ BOTDEPTH + offset(log.Effort) | year + BOTDEPTH+ offset(log.Effort)),
-    #   as.formula(Catch.Target ~ BOTDEPTH +Moon+ offset(log.Effort) | year + BOTDEPTH+Moon+ offset(log.Effort)),
-    #   as.formula(Catch.Target ~ BOTDEPTH +Moon+Mid.Lat+SOI+ offset(log.Effort) | year + BOTDEPTH+Moon+Mid.Lat+SOI+ offset(log.Effort)))
-    # 
-    # Formulas.Hu.BT=Formulas 
-    # Formulas.Hu.ST=Formulas 
-    # Formulas.Hu.Mi=Formulas 
-    # 
-    # Formulas.Hu=list(Formulas.Hu.Du,Formulas.Hu.SB,Formulas.Hu.Ti,Formulas.Hu.SH,
-    #                  Formulas.Hu.BT,Formulas.Hu.ST,Formulas.Hu.Mi)
-    
-    
-    
-    Store.count=vector('list',N.species)
-    names(Store.count)=names(DATA.list)
-    Store.count.ZI=Store.count.Twee=Store.count.Hur=Store.count
-    system.time(for(i in Species.cpue)
-    {
-      Dat=DATA.list[[i]]
-      
-      #count glms
-      S.count=vector('list',length(Formulas))
-      for(p in 1:length(Formulas)) S.count[[p]]=Count.fn(Dat,Formulas[[p]])
-      Store.count[[i]]=S.count
-      
-      #Zero inflated glms
-      Form.ZI=Formulas.ZI
-      #Form.ZI=Formulas.ZI[[i]]
-      Z.count=vector('list',length(Form.ZI))
-      for(p in 1:length(Form.ZI)) Z.count[[p]]=ZI.fn(Dat,Form.ZI[[p]])
-      Store.count.ZI[[i]]=Z.count
-      
-      #Tweedie glms
-      Tw.count=vector('list',length(Formulas.Twe))
-      for(p in 1:length(Formulas.Twe)) Tw.count[[p]]=Tweedie.fn(Dat,Formulas.Twe[[p]])
-      Store.count.Twee[[i]]=Tw.count
-      
-      #Hurdle glms
-      Form.Hu=Formulas.Hu[[i]]
-      H.count=vector('list',length(Form.Hu))
-      for(p in 1:length(Form.Hu)) H.count[[p]]=Hurdle.fn(Dat,Form.Hu[[p]])
-      Store.count.Hur[[i]]=H.count
-    })
-  }
-  
-  #Predicting function
-  Pred.Model=function(MOD,Dta)
-  {
-    Dta$log.Effort=log(Dta$N.hooks.Fixed*Dta$SOAK.TIME)
-    PREDS=NULL
-    if(!is.null(MOD))PREDS=predict(MOD,Dta, type='response')
-    return(list(PREDS=PREDS))
-  }
-  
-  
-  #1.11.3 Select best error structure   
-  if(Select.error=="YES")
-  {
-    #Formulas
-      #count
-    Formulas=as.formula(Catch.Target ~ year+log.Mid.Lat+log.BOTDEPTH+offset(log.Effort))
-    
-      #zero inflated and Hurdle
-    Formulas.ZI=Formulas.Hu=DATA.list
+    SLCT.TRM=vector('list',length(Species.cpue))
+    names(SLCT.TRM)=names(DATA.list)
+    for(i in Species.cpue) SLCT.TRM[[i]]=Select.best.modl.str(d=Select.term_error[[i]])
+    AIC.terms=do.call(rbind,lapply(SLCT.TRM, `[[`, 1))
+    Resid.deviance.terms=do.call(rbind,lapply(SLCT.TRM, `[[`, 2))
+    write.csv(AIC.terms,paste(getwd(),"/Model selection/AIC.terms.csv",sep=''))
+    write.csv(Resid.deviance.terms,paste(getwd(),"/Model selection/Deviance.explained.by.terms.csv",sep=''))
+    Best.SLCT.TRM=SLCT.TRM
     for(i in Species.cpue)
     {
-      ll=list(P=Formulas,NB=Formulas)
-      Formulas.ZI[[i]]=ll
-      Formulas.Hu[[i]]=ll
+      d=Best.SLCT.TRM[[i]]$Deviance.exp
+      Best.terms=vector('list',ncol(d)-1)
+      names(Best.terms)=colnames(d)[-1]
+      for(p in 1:length(Best.terms))
+      {
+        d1=d[,c(1,p+1)]%>%mutate(Prev=lag(d[,p+1],1),
+                                 Exp.per=d[,p+1]-Prev,
+                                 Exp.per=ifelse(is.na(Exp.per),10,Exp.per))
+        Best.terms[[p]]=d1$Term[which(d1$Exp.per>2)]
+      }
+      Best.SLCT.TRM[[i]]=Best.terms
     }
     
-      #Specify submodels for some species
-    Formulas.ZI$"Sandbar shark"$NB=
-      as.formula(Catch.Target ~ year + log.Mid.Lat + offset(log.Effort) |
-                   year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-    
-    Formulas.ZI$"Spot-tail shark"$NB=
-      as.formula(Catch.Target ~ year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
-                   year + offset(log.Effort))
-    Formulas.Hu$"Spot-tail shark"$P=Formulas.ZI$"Sandbar shark"$NB
-    
-    Formulas.ZI$"Tiger shark"$NB=
-      as.formula(Catch.Target ~ year + log.Mid.Lat + offset(log.Effort) | 
-                   year +log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-    
-    Formulas.Hu$"Tiger shark"$P=Formulas.Hu$"Tiger shark"$NB=
-      as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
-                   year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-    
-    Formulas.ZI$"Blacktip sharks"$NB=
-      as.formula(Catch.Target ~ year + log.BOTDEPTH + offset(log.Effort) | 
-                   year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-    Formulas.Hu$"Blacktip sharks"$NB=
-      as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
-                   year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-    
-    Formulas.Hu$"Scalloped hammerhead"$P=
-      as.formula(Catch.Target ~ year + log.BOTDEPTH + offset(log.Effort) | 
-                   year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-    Formulas.Hu$"Scalloped hammerhead"$NB=
-      as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
-                   year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-    
-    Formulas.Hu$"Dusky shark"$P=
-      as.formula(Catch.Target ~ year + log.BOTDEPTH + offset(log.Effort) | 
-                   year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-    Formulas.ZI$"Dusky shark"$NB=
-      as.formula(Catch.Target ~ year + offset(log.Effort) | 
-                                year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-      
-    Formulas.ZI$"Dusky shark"$P=Formulas.Hu$"Dusky shark"$NB=
-      as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
-                   year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-    
-    Formulas.ZI$"Sliteye shark"$P=
-      as.formula(Catch.Target ~ year + log.Mid.Lat + offset(log.Effort) | 
-                   year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-    Formulas.ZI$"Sliteye shark"$NB=Formulas.ZI$"Dusky shark"$NB
-    Formulas.Hu$"Sliteye shark"$P=Formulas.Hu$"Sliteye shark"$NB=
-      as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
-                   year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-    
-     #Fit all error structures
-    Store=vector('list',N.species)
-    names(Store)=names(DATA.list)
-    
-    fn.chk.error=function(d)
-    {
-      TT=with(subset(d,Catch.Target>0),table(year))
-      d=subset(d,year%in%names(TT))
-      d$year=factor(d$year,levels=sort(unique(d$year)))
-      d$log.Effort=log(d$N.hooks.Fixed*d$SOAK.TIME)
-      d$Mid.Lat=abs(d$Mid.Lat)
-      d$log.BOTDEPTH=log(d$BOTDEPTH)
-      d$log.Mid.Lat=log(d$Mid.Lat)
-      
-      Pois=NB=ZINB=ZIP=Hurdle.Pois=Hurdle.NB=NULL
-      
-      Pois=Count.Pois.fn(DAT=d,FORMULA=Formulas)
-      NB=Count.NB.fn(DAT=d,FORMULA=Formulas)
-      
-      tryCatch({
-        ZIP=ZIP.fn(DAT=d,FORMULA=Formulas.ZI[[i]]$P)
-      }, error = function(e) 
+    #  Select best error 
+    cl <- makeCluster(detectCores()-1)
+    registerDoParallel(cl)
+    getDoParWorkers()
+    system.time({Select.error=foreach(i=Species.cpue,.packages=c('zigam','mgcv','dplyr','doParallel')) %dopar%
       {
-      })
-      tryCatch({
-        ZINB=ZINB.fn(DAT=d,FORMULA=Formulas.ZI[[i]]$NB)
-      }, error = function(e) 
-      {
-      })
+        Terms=Best.SLCT.TRM[[i]]
+        
+        TT=with(subset(DATA.list[[i]],Catch.Target>0),table(year))
+        d=subset(DATA.list[[i]],year%in%names(TT[TT>0]))
+        
+        d=d %>% filter(BOTDEPTH<210 & FixedStation=="YES") %>%
+                mutate(Mid.Lat=abs(Mid.Lat),
+                       log.Ef=log(SOAK.TIME*N.hooks.Fixed),
+                       year=factor(year,levels=unique(sort(year))),
+                       Month=factor(Month,levels=unique(sort(Month))),
+                       Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
+        
       
-      tryCatch({
-        Hurdle.Pois=Hurdle.Pois.fn(DAT=d,FORMULA=Formulas.Hu[[i]]$P)
-      }, error = function(e) 
-      {
-      })
-      
-      tryCatch({
-        Hurdle.NB=Hurdle.NB.fn(DAT=d,FORMULA=Formulas.Hu[[i]]$NB)
-      }, error = function(e) 
-      {
-      })
-      
-      return=list(MODS=list(Pois=Pois,NB=NB,ZIP=ZIP,ZINB=ZINB,
-                            Hurdle.Pois=Hurdle.Pois,Hurdle.NB=Hurdle.NB),
-              DAT=d,
-              Forms=list(Pois=Formulas,NB=Formulas,
-                         ZIP=Formulas.ZI[[i]]$P,ZINB=Formulas.ZI[[i]]$NB,
-                         Hurdle.Pois=Formulas.Hu[[i]]$P,Hurdle.NB=Formulas.Hu[[i]]$NB))
-    }
-    system.time(for(i in Species.cpue)  #takes 13 seconds
-    {
-      Store[[i]]=fn.chk.error(d=subset(DATA.list[[i]],FixedStation=="YES",select=VARIABLES)) 
-    })
+        Gam.Pois=gam(formula(paste(Res.var,paste(c(Terms$Pois,Offset),collapse="+"),sep="~")),
+                     data=d,method = "REML",family=poisson)
+        Gam.Nb=gam(formula(paste(Res.var,paste(c(Terms$NB,Offset),collapse="+"),sep="~")),
+                   data=d,method = "REML",family = nb)
+        Gam.ZIP=zipgam(lambda.formula=formula(paste(Res.var,paste(c(Terms$ZIP,Offset),collapse="+"),sep="~")),
+                       pi.formula=formula(paste(Res.var,paste(c(Terms$ZIP,Offset),collapse="+"),sep="~")),
+                       data=d)
+        Gam.ZINB=zinbgam(mu.formula=formula(paste(Res.var,paste(c(Terms$ZINB,Offset),collapse="+"),sep="~")),
+                         pi.formula=formula(paste(Res.var,paste(c(Terms$ZINB,Offset),collapse="+"),sep="~")),
+                         data=d)
+        
+        dummy=list(Pois=Gam.Pois,NB=Gam.Nb,ZIP=Gam.ZIP,ZINB=Gam.ZINB)
+        return(dummy)
+      }})    #takes 20 seconds
+    names(Select.error)=names(DATA.list)
+    stopCluster(cl) 
     
     #output pdf
-    kmpr.error.pred=function(MOD)
-    {
-      lsm=MOD
-      for(m in 1:length(lsm))
-      {
-        if(!is.null(MOD[[m]]))
-        {
-          lsm[[m]]=summary(emmeans(MOD[[m]],'year', type="response"))
-          names(lsm[[m]])=c("year","mean","SE","df","Low.CI","UP.CI")
-        }
-      }
-      Yrs=as.numeric(as.character(levels(DAT$year)))
-      COL=c("black","grey50","blue","cyan","grey80","cornflowerblue")
-      Dlt=seq(-0.2,.2,length.out = 6)
-      
-      plot(Yrs,Yrs,main="",xlab="",ylab="CPUE",ylim=c(0,min(c(10,max(do.call(rbind,lsm)$UP.CI,na.rm = T)))))
-      for(m in 1:length(lsm))
-      {
-        if(!is.null(MOD[[m]]))
-        {
-          with(lsm[[m]],points(Yrs+Dlt[m],mean,cex=1.25,"o", pch=16, lty=2,col=COL[m]))
-          suppressWarnings(with(lsm[[m]],arrows(x0=Yrs+Dlt[m], y0=Low.CI, x1=Yrs+Dlt[m],
-                                                y1=UP.CI,code = 3,angle=90,length=.025,col=COL[m])))
-          
-        }
-      }
-      not.converged=names(MOD)[unlist(lapply(MOD,is.null))]
-      ids=match(not.converged,names(MOD))
-      LGn=c("Pois","NB","ZIP","ZINB","HuP","HuNB")
-      LGn[ids]=paste(LGn[ids],"(no convergence)")
-      legend("top",LGn,col=COL,pch=19,bty='n')
-    }
-    kmpr.error.BIC=function(MOD)
-    {
-      id=which(!names(MOD)%in%names(MOD)[unlist(lapply(MOD,is.null))])
-      par(las=3)
-      barplot(unlist(lapply(MOD[id],BIC)),ylab="BIC")
-    }
-    
-    kmpr.error.fit.diag=function(MOD)
-    {
-      #Show coefficients
-      for(m in 1:length(MOD))
-      {
-        if(!is.null(MOD[[m]]))
-        {
-          plot.new()
-          legend('topleft',names(MOD)[m],bty='n')
-          tmp <- round(as.data.frame.matrix(coeftest(MOD[[m]])),3)
-          mytheme <- gridExtra::ttheme_default(
-            core = list(padding=unit(c(1, 1), "mm"),fg_params=list(cex = .5)),
-            colhead = list(fg_params=list(cex = .7)),
-            rowhead = list(fg_params=list(cex = .7)))
-          myt <- gridExtra::tableGrob(tmp, theme = mytheme)
-          grid.draw(myt)
-        }
-      }
-      
-      #Quantiles
-      par(mfcol=c(3,2),las=1,mar=c(3,3,1,1),mgp=c(1.5,.7,0))
-      for(m in 1:length(MOD))
-      {
-        if(!is.null(MOD[[m]])) qqrplot(MOD[[m]], main = names(MOD)[m])
-      }
-      
-      #Rotogram
-      #note: if wave like pattern, then overdispersion in data
-      par(mfcol=c(3,2),las=1,mar=c(3,3,1,1),mgp=c(1.5,.7,0))
-      for(m in 1:length(MOD))
-      {
-        if(!is.null(MOD[[m]])) rootogram(MOD[[m]], main = names(MOD)[m])
-      }
-      
-      
-      #Pearson Residuals (more appropriate for count distributions)
-      par(mfcol=c(3,2),las=1,mar=c(3,3,1,1),mgp=c(1.5,.7,0))
-      for(m in 1:length(MOD))
-      {
-        if(!is.null(MOD[[m]]))
-        {
-          E1=resid(MOD[[m]],type='pearson')
-          hist(E1,xlab="Pearson residuals",main=names(MOD[m]))
-        }
-        if(is.null(MOD[[m]]))
-        {
-             plot(1,col="transparent",ann=F,axes=F)
-             legend("center",paste(names(MOD[m]),"(no convergence)"),bty='n')
-        }
-      }
-    }
-    
-    OverDisp=function(MoD)  #If Overdispersion >> 1, then Poisson...
-    {
-      E1=resid(MoD,type='pearson')
-      Dispersion=sum(E1^2)/MoD$df.resid 
-      if(is.null(MoD))Dispersion=NA
-      return(list(Dispersion=Dispersion))
-    }
-
     LOgLik=function(MoD)  #get model Loglikelihood
     {
-      if(!is.null(MoD))LOgL=logLik(MoD)
+      if(!is.null(MoD))
+      {
+        if(class(MoD)[1]%in%c("zinbgam","zipgam")) LOgL=MoD$logL[length(MoD$logL)] else
+          LOgL=as.numeric(logLik(MoD))
+      }
+      
       if(is.null(MoD))LOgL=NA
       return(LOgL)
     }
-    
     fn.AIC=function(MoD)  #get AIC
     {
-      AIc=NA
-      if(!is.null(MoD)) AIc=AIC(MoD)
-      return(AIc)
+      return(MoD$aic)
     }
-    fn.AICc=function(DAT)  #get AICc
+    fn.AICc=function(MoD,LoGLike)  #get AICc (not applicable if all models have same number of parameter)
     {
-      DAT1=DAT[[1]]
-      AIC.c=NA
-      if(!is.null(DAT1))
+      if(!is.null(MoD))
       {
-        Sample.size=dim(model.matrix(DAT1))[1]
-        Num.pars=dim(model.matrix(DAT1))[2]
-        LoGLike=logLik(DAT1)[1]
+        Sample.size=dim(model.matrix(MoD))[1]
+        Num.pars=dim(model.matrix(MoD))[2]
         AIC.c=-2*LoGLike+(2*Num.pars*(Sample.size/(Sample.size-Num.pars-1)))
       }
-      #if(names(DAT)=="Tweed" & !is.null(DAT[[1]])) AIC.c=AICtweedie(DAT[[1]])
       return(AIC.c)
     }
     fn.AIC.ratio=function(DAT)
@@ -1954,64 +1605,611 @@ if(Do.abundance=="YES")
       Weight=Like.model.give.dat/sum(Like.model.give.dat,na.rm=T)
       id=which(Weight==max(Weight,na.rm=T))
       names(Weight)=NULL
-      Evidence.ratio=outer(Weight[id],Weight, "/")
+      Evidence.ratio=c(outer(Weight[id],Weight, "/"))
       return(list(Best.Mod=id,Delta=Delta,Like=Like.model.give.dat,Weight=Weight,Evidence.ratio_how.much.better=Evidence.ratio))
     }
-    
-    Deg.Free=function(MoD)   #get degrees of freedom
+    CL=c("grey50","grey80","blue","cornflowerblue")
+    fn.pred=function(term,DAT,MOD,Nml)
     {
-      if(is.null(MoD$df.residual))return(NA)
-      if(!is.null(MoD$df.residual)) return(MoD$df.residual)  
-    }
-    
-    Get.dev=function(MoD,DAT)
-    {
-      Null.2times.like=Res.2times.like=NA
-      if(!is.null(MoD))
-      {
-        MOD.null=update(MoD,.~1)
-        Null.2times.like=as.numeric(-2*logLik(MOD.null))
-        Res.2times.like=as.numeric(-2*logLik(MoD)) 
-      }
-      return(list(Null.2times.like=Null.2times.like,Res.2times.like=Res.2times.like))
-    }
-    
-    Dsquared <- function(model, adjust = F)
-    {
-      d1=NA
-      d2=NA
-      d3=NA
+      TT=with(subset(DAT,Catch.Target>0),table(year))
+      DAT=subset(DAT,year%in%names(TT[TT>0]))
       
-      if(!is.null(model$deviance))
+      newdata=data.frame(year=factor(sort(unique(DAT$year)),levels=unique(sort(DAT$year))),
+                         Month=mx.lev(DAT$Month),
+                         Mid.Lat=mean(DAT$Mid.Lat),
+                         BOTDEPTH=mean(DAT$BOTDEPTH),
+                         Temp.res=mean(DAT$Temp.res),
+                         Moon=mx.lev(DAT$Moon),
+                         log.Ef=log(mean(DAT$SOAK.TIME*DAT$N.hooks.Fixed))) 
+      
+      PRD=vector('list',length(MOD))
+      for(m in 1:length(MOD))
       {
-        d2 <- (model$null.deviance - model$deviance) / model$null.deviance
-        if (adjust)
+        d1=data.frame(year=newdata$year)
+        pp=c(predict(MOD[[m]],type='response',newdata=newdata))
+        d1$year=as.numeric(as.character(d1$year))
+        d1$mean=pp/mean(pp)
+        misn=which(!Nml$year%in%d1$year)
+        if(length(misn)>0)
         {
-          n <- length(model$fitted.values)
-          p <- length(model$coefficients)
-          d2 <- 1 - ((n - 1) / (n - p)) * (1 - d2)
+          d1=rbind(d1,Nml[misn,c('year','mean')])
+          d1=d1[order(d1$year),]
         }
-        d3=d2*100
-        d1=model$deviance
-        d2=model$null.deviance
+        PRD[[m]]=d1
       }
       
-      return(list(d1=d1,d2=d2,d3=d3))
+      plot(Nml$year,Nml$mean,pch=19,cex=2,ylab="Relative cpue",xlab="year",
+           ylim=c(0,max(Nml$mean,na.rm=T)))
+      for(m in 1:length(MOD)) 
+      {
+        lines(PRD[[m]]$year,PRD[[m]]$mean,col=CL[m],lwd=2)
+        points(PRD[[m]]$year,PRD[[m]]$mean,col=CL[m],pch=19,cex=1.5)
+      }
+        
+      legend('topleft',paste(c("nominal",names(MOD))),col=c('black',CL),bty='n',
+             pch=c(19,rep(NA,length(MOD))),lwd=c(1,rep(2,length(MOD))),lty=c(NA,rep(1,length(MOD))))
+      
+    }
+    mx.lev=function(x) factor(names(which(table(x)==max(table(x)))) ,levels=levels(x))
+    Gam.fit.diag=function(MOD)
+    {
+      par(mfcol=c(2,2))
+      for(m in 1:length(MOD))
+      {
+        if(class(MOD[[m]])[1]%in%c("zipgam","zinbgam"))
+        {
+          gam.check(MOD[[m]][[1]])
+          mtext(paste(names(MOD)[m],"counts part"),3,outer=T,line=-1.5,cex=1.5)
+          gam.check(MOD[[m]][[2]])
+          mtext(paste(names(MOD)[m],"binomial part"),3,outer=T,line=-1.5,cex=1.5)
+        }else
+        {
+          gam.check(MOD[[m]])
+          mtext(names(MOD)[m],3,outer=T,line=-1.5,cex=1.5)
+        }
+      }
     }
     
-    Inc.Dev.Exp=function(A,B)round((100*A/B)-100)  #increase in deviance explained from one model to next
+    pdf(paste(hndLs,"/Model selection/Compare error.pdf",sep=""))
     
+    #table of deviance explained for each term
+    plot.new()
+    mytheme <- gridExtra::ttheme_default(
+      core = list(padding=unit(c(1, 1), "mm"),fg_params=list(cex = .75)),
+      colhead = list(fg_params=list(cex = .8)),
+      rowhead = list(fg_params=list(cex = .8)))
+    myt <- gridExtra::tableGrob(Resid.deviance.terms[1:21,], theme = mytheme)
+    grid.draw(myt)
+    mtext("Deviance explained",3,line=2,cex=1.5)
+    
+    plot.new()
+    mytheme <- gridExtra::ttheme_default(
+      core = list(padding=unit(c(1, 1), "mm"),fg_params=list(cex = .75)),
+      colhead = list(fg_params=list(cex = .8)),
+      rowhead = list(fg_params=list(cex = .8)))
+    myt <- gridExtra::tableGrob(Resid.deviance.terms[22:41,], theme = mytheme)
+    grid.draw(myt)
+
     for(i in Species.cpue)
     {
-      pdf(paste(hndLs,"/Model selection/Comapre error.",Tar.names[i],".pdf",sep=""))
-      DAT=Store[[i]]$DAT
-      kmpr.error.pred(MOD=Store[[i]]$MODS)
-      rm(DAT)
-      kmpr.error.BIC(MOD=Store[[i]]$MODS)
-      kmpr.error.fit.diag(MOD=Store[[i]]$MODS)
+        #Table of information criteria
+      Title=c("Log.Like","AIC.c","AIC.delta","AIC.w","AIC.Ev.ratio")
+      Compare=as.data.frame(matrix(ncol=length(Title),nrow=length(Select.error[[i]])))
+      colnames(Compare)=Title
+      rownames(Compare)=names(Select.error[[i]])
+      Compare$Log.Like=round(unlist(sapply(Select.error[[i]],LOgLik)))
+      store.aicc=unlist(sapply(Select.error[[i]],fn.AIC))
+      Compare$AIC.c=round(store.aicc)
+      AIC.w.r=fn.AIC.ratio(store.aicc)
+      Compare$AIC.delta=round(AIC.w.r$Delta)
+      Compare$AIC.w=formatC(AIC.w.r$Weight, format = "e", digits = 2)
+      Compare$AIC.Ev.ratio=formatC(AIC.w.r$Evidence.ratio_how.much.better, format = "e", digits = 2)
+      id.best=which(AIC.w.r$Weight==max(AIC.w.r$Weight,na.rm=T))
+      Best.error.AIC.w=rownames(Compare)[id.best]
+      Best.formula=formula(paste(Res.var,paste(c(Terms[id.best],Offset),collapse="+"),sep="~"))
+      plot.new()
+      mytheme <- gridExtra::ttheme_default(
+        core = list(padding=unit(c(1, 1), "mm"),fg_params=list(cex = 1)),
+        colhead = list(fg_params=list(cex = 1.25)),
+        rowhead = list(fg_params=list(cex = 1.25)))
+      myt <- gridExtra::tableGrob(Compare, theme = mytheme)
+      grid.draw(myt)
+     # legend('bottom',paste(c(paste("Best.AIC.w=",Best.error.AIC.w),Best.formula)),bty='n',cex=.7)
+      mtext(Tar.names[i],3,cex=1.5)
+      
+      #model fit to data
+      Gam.fit.diag(MOD=Select.error[[i]])
+      
+      par(mfcol=c(1,1))
+      fn.pred(term="year",
+              DAT=DATA.list[[i]] %>% filter(BOTDEPTH<210 & FixedStation=="YES") %>%
+                mutate(Mid.Lat=abs(Mid.Lat),
+                       log.Ef=log(SOAK.TIME*N.hooks.Fixed),
+                       Month=factor(Month,levels=unique(sort(Month))),
+                       Moon=factor(Moon,levels=c("Full","Waning","New","Waxing"))),
+              MOD=Select.error[[i]],
+              Nml=fn.nmnl(dat=subset(DATA.list[[i]],FixedStation=="YES"),REL="YES"))
+      
+    }
+    dev.off()
+    
+  }
+  
+  if(do.GLM=="YES" & Select.term=="YES")
+  {
+    # Set up different distribution function
+    #Poisson and NB
+    Count.Pois.fn=function(DAT,FORMULA) Pois=glm(FORMULA,data=DAT,family="poisson")
+    Count.NB.fn=function(DAT,FORMULA) NB=glm.nb(FORMULA, data = DAT)
+    
+    #Zero Inflated
+    ZIP.fn=function(DAT,FORMULA)  ZIP <- zeroinfl(FORMULA, data = DAT, dist = "poisson")
+    ZINB.fn=function(DAT,FORMULA) if(!is.null(FORMULA))ZINB <- zeroinfl(FORMULA, data = DAT, dist = "negbin")
+    
+    #Tweedie
+    Tweedie.fn=function(DAT,FORMULA)
+    {
+      #Tweedie
+      # 1.Find p value thru likelihood profiling
+      #note: expect  xi  about 1.5
+      P.eval=seq(1.1, 1.9, length=9)
+      out <- tweedie.profile(FORMULA,xi.vec=P.eval,data=DAT, do.plot=F)
+      P=out$xi.max
+      
+      # 2.Fit the glm
+      Tweed=glm( FORMULA,data=DAT, family=tweedie(var.power=P, link.power=0) )
+      
+      return(list(Tweed=Tweed))
+    }
+    
+    #Hurdle
+    Hurdle.Pois.fn=function(DAT,FORMULA) Hurdle.Pois = hurdle(FORMULA, data = DAT , dist="poisson")
+    Hurdle.NB.fn=function(DAT,FORMULA) if(!is.null(FORMULA))Hurdle.NB = hurdle(FORMULA, data = DAT , dist="negbin")
+    
+    #Fit all model structures to all species
+    Preds=c("year","Mid.Lat","BOTDEPTH")
+    VARIABLES=c("Catch.Target",Preds,"N.hooks.Fixed","SOAK.TIME")
+    names(Preds)=c("Cat","Cont","Cont")  
+    
+    # Select terms for each error structure
+    if(Select.term=="YES")
+    {
+      fitFun=function(FORMULA, data,...) zeroinfl(FORMULA, data,dist = ErroR)
+      choose.term=function(DAT,FORMULA,ErroR)
+      {
+        id=match(Preds[which(names(Preds)=="Cat")],names(DAT))
+        for(pp in 1:length(id))DAT[,id[pp]]=as.factor(DAT[,id[pp]])
+        DAT$log.Effort=log(DAT$N.hooks.Fixed*DAT$SOAK.TIME)
+        DAT$Mid.Lat=abs(DAT$Mid.Lat)
+        #m1 = zeroinfl(FORMULA, data = DAT, dist = ErroR)
+        #fitbe = be.zeroinfl(m1, data = DAT, dist = ErroR,alpha = 0.01, trace = FALSE)
+        res <- glmulti(FORMULA,data=DAT, level=1,method="h", fitfunction=fitFun,
+                       crit="aicc",plotty = F, report = T)
+        BEST=res@formulas[[1]]
+        
+        return(BEST)
+      }
+      choose.term(DAT=subset(DATA.list[[i]],FixedStation=="YES",select=VARIABLES),
+                  FORMULA=as.formula(paste("Catch.Target",paste(c(Preds,'offset(log.Effort)'),collapse="+"),sep="~")),
+                  ErroR="poisson")
+      
+      #Formulas count
+      Formulas=list(
+        as.formula(Catch.Target ~ year + offset(log.Effort)),
+        as.formula(Catch.Target ~ year + Month + offset(log.Effort)),
+        as.formula(Catch.Target ~ year + Month + BOTDEPTH + offset(log.Effort)),
+        as.formula(Catch.Target ~ year + Month + BOTDEPTH + Moon + offset(log.Effort)),
+        as.formula(Catch.Target ~ year + Month + BOTDEPTH + Moon + Mid.Lat +  offset(log.Effort)))
+      
+      #Formulas zero inflated
+      Formulas.ZI=list(
+        as.formula(Catch.Target ~ year + offset(log.Effort)|year + offset(log.Effort)),
+        as.formula(Catch.Target ~ year + Month + offset(log.Effort)|year + Month + offset(log.Effort)),
+        as.formula(Catch.Target ~ year + Month + BOTDEPTH + offset(log.Effort)|year + Month + BOTDEPTH + offset(log.Effort)),
+        as.formula(Catch.Target ~ year + Month + BOTDEPTH + Moon + offset(log.Effort)|year + Month + BOTDEPTH + Moon+ offset(log.Effort)),
+        as.formula(Catch.Target ~ year + Month + BOTDEPTH + Moon + Mid.Lat +  offset(log.Effort)|year + Month + BOTDEPTH + Moon + Mid.Lat+ offset(log.Effort)))
+      
+      # Formulas.ZI.Du=Formulas.ZI.SH=NULL
+      # Formulas.ZI.SB=list(
+      #   as.formula(Catch.Target ~ year + BOTDEPTH + offset(log.Effort)|year + offset(log.Effort)),
+      #   as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ offset(log.Effort)|year + offset(log.Effort)),
+      #   as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ Mid.Lat+ offset(log.Effort)|year + Mid.Lat+ offset(log.Effort)))
+      # 
+      # Formulas.ZI.Ti=list(
+      #   as.formula(Catch.Target ~ year + Moon+ offset(log.Effort)|year + offset(log.Effort)),
+      #   as.formula(Catch.Target ~ year + Moon+ Mid.Lat+ offset(log.Effort)|year + offset(log.Effort)),
+      #   as.formula(Catch.Target ~ year + Moon+ Mid.Lat+ BOTDEPTH+ offset(log.Effort)|year + offset(log.Effort)))
+      # 
+      # Formulas.ZI.BT=list(
+      #   as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ offset(log.Effort)|year + Moon+ offset(log.Effort)),
+      #   as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ Mid.Lat+ offset(log.Effort)|year + Moon+ offset(log.Effort)))
+      # 
+      # Formulas.ZI.ST=list(
+      #   as.formula(Catch.Target ~ year + BOTDEPTH + offset(log.Effort)|year + offset(log.Effort)),
+      #   as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ Mid.Lat+ offset(log.Effort)|year + Mid.Lat+ offset(log.Effort)))
+      # 
+      # Formulas.ZI.Mi=Formulas.ZI.SB
+      # 
+      # Formulas.ZI=list(Formulas.ZI.Du,Formulas.ZI.SB,Formulas.ZI.Ti,Formulas.ZI.SH,
+      #                  Formulas.ZI.BT,Formulas.ZI.ST,Formulas.ZI.Mi)
       
       
-      #Put model comparisons in table
+      #Formulas Tweedie
+      Formulas.Twe=Formulas
+      
+      #Formulas Hurdle
+      Formulas.Hu=Formulas.ZI
+      # Formulas.Hu.Du=Formulas.Hu.SH=NULL
+      # Formulas.Hu.SB=Formulas
+      # Formulas.Hu.Ti=list(
+      #   as.formula(Catch.Target ~ BOTDEPTH + offset(log.Effort) | year + BOTDEPTH+ offset(log.Effort)),
+      #   as.formula(Catch.Target ~ BOTDEPTH +Moon+ offset(log.Effort) | year + BOTDEPTH+Moon+ offset(log.Effort)),
+      #   as.formula(Catch.Target ~ BOTDEPTH +Moon+Mid.Lat+SOI+ offset(log.Effort) | year + BOTDEPTH+Moon+Mid.Lat+SOI+ offset(log.Effort)))
+      # 
+      # Formulas.Hu.BT=Formulas 
+      # Formulas.Hu.ST=Formulas 
+      # Formulas.Hu.Mi=Formulas 
+      # 
+      # Formulas.Hu=list(Formulas.Hu.Du,Formulas.Hu.SB,Formulas.Hu.Ti,Formulas.Hu.SH,
+      #                  Formulas.Hu.BT,Formulas.Hu.ST,Formulas.Hu.Mi)
+      
+      
+      
+      Store.count=vector('list',N.species)
+      names(Store.count)=names(DATA.list)
+      Store.count.ZI=Store.count.Twee=Store.count.Hur=Store.count
+      system.time(for(i in Species.cpue)
+      {
+        Dat=DATA.list[[i]]
+        
+        #count glms
+        S.count=vector('list',length(Formulas))
+        for(p in 1:length(Formulas)) S.count[[p]]=Count.fn(Dat,Formulas[[p]])
+        Store.count[[i]]=S.count
+        
+        #Zero inflated glms
+        Form.ZI=Formulas.ZI
+        #Form.ZI=Formulas.ZI[[i]]
+        Z.count=vector('list',length(Form.ZI))
+        for(p in 1:length(Form.ZI)) Z.count[[p]]=ZI.fn(Dat,Form.ZI[[p]])
+        Store.count.ZI[[i]]=Z.count
+        
+        #Tweedie glms
+        Tw.count=vector('list',length(Formulas.Twe))
+        for(p in 1:length(Formulas.Twe)) Tw.count[[p]]=Tweedie.fn(Dat,Formulas.Twe[[p]])
+        Store.count.Twee[[i]]=Tw.count
+        
+        #Hurdle glms
+        Form.Hu=Formulas.Hu[[i]]
+        H.count=vector('list',length(Form.Hu))
+        for(p in 1:length(Form.Hu)) H.count[[p]]=Hurdle.fn(Dat,Form.Hu[[p]])
+        Store.count.Hur[[i]]=H.count
+      })
+    }
+    
+    #Predicting function
+    Pred.Model=function(MOD,Dta)
+    {
+      Dta$log.Effort=log(Dta$N.hooks.Fixed*Dta$SOAK.TIME)
+      PREDS=NULL
+      if(!is.null(MOD))PREDS=predict(MOD,Dta, type='response')
+      return(list(PREDS=PREDS))
+    }
+    
+    # Select best error structure   
+    if(Select.error=="YES")
+    {
+      #Formulas
+      #count
+      Formulas=as.formula(Catch.Target ~ year+log.Mid.Lat+log.BOTDEPTH+offset(log.Effort))
+      
+      #zero inflated and Hurdle
+      Formulas.ZI=Formulas.Hu=DATA.list
+      for(i in Species.cpue)
+      {
+        ll=list(P=Formulas,NB=Formulas)
+        Formulas.ZI[[i]]=ll
+        Formulas.Hu[[i]]=ll
+      }
+      
+      #Specify submodels for some species
+      Formulas.ZI$"Sandbar shark"$NB=
+        as.formula(Catch.Target ~ year + log.Mid.Lat + offset(log.Effort) |
+                     year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+      
+      Formulas.ZI$"Spot-tail shark"$NB=
+        as.formula(Catch.Target ~ year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
+                     year + offset(log.Effort))
+      Formulas.Hu$"Spot-tail shark"$P=Formulas.ZI$"Sandbar shark"$NB
+      
+      Formulas.ZI$"Tiger shark"$NB=
+        as.formula(Catch.Target ~ year + log.Mid.Lat + offset(log.Effort) | 
+                     year +log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+      
+      Formulas.Hu$"Tiger shark"$P=Formulas.Hu$"Tiger shark"$NB=
+        as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
+                     year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+      
+      Formulas.ZI$"Blacktip sharks"$NB=
+        as.formula(Catch.Target ~ year + log.BOTDEPTH + offset(log.Effort) | 
+                     year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+      Formulas.Hu$"Blacktip sharks"$NB=
+        as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
+                     year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+      
+      Formulas.Hu$"Scalloped hammerhead"$P=
+        as.formula(Catch.Target ~ year + log.BOTDEPTH + offset(log.Effort) | 
+                     year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+      Formulas.Hu$"Scalloped hammerhead"$NB=
+        as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
+                     year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+      
+      Formulas.Hu$"Dusky shark"$P=
+        as.formula(Catch.Target ~ year + log.BOTDEPTH + offset(log.Effort) | 
+                     year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+      Formulas.ZI$"Dusky shark"$NB=
+        as.formula(Catch.Target ~ year + offset(log.Effort) | 
+                     year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+      
+      Formulas.ZI$"Dusky shark"$P=Formulas.Hu$"Dusky shark"$NB=
+        as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
+                     year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+      
+      Formulas.ZI$"Sliteye shark"$P=
+        as.formula(Catch.Target ~ year + log.Mid.Lat + offset(log.Effort) | 
+                     year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+      Formulas.ZI$"Sliteye shark"$NB=Formulas.ZI$"Dusky shark"$NB
+      Formulas.Hu$"Sliteye shark"$P=Formulas.Hu$"Sliteye shark"$NB=
+        as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
+                     year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+      
+      #Fit all error structures
+      Store=vector('list',N.species)
+      names(Store)=names(DATA.list)
+      
+      fn.chk.error=function(d)
+      {
+        TT=with(subset(d,Catch.Target>0),table(year))
+        d=subset(d,year%in%names(TT))
+        d$year=factor(d$year,levels=sort(unique(d$year)))
+        d$log.Effort=log(d$N.hooks.Fixed*d$SOAK.TIME)
+        d$Mid.Lat=abs(d$Mid.Lat)
+        d$log.BOTDEPTH=log(d$BOTDEPTH)
+        d$log.Mid.Lat=log(d$Mid.Lat)
+        
+        Pois=NB=ZINB=ZIP=Hurdle.Pois=Hurdle.NB=NULL
+        
+        Pois=Count.Pois.fn(DAT=d,FORMULA=Formulas)
+        NB=Count.NB.fn(DAT=d,FORMULA=Formulas)
+        
+        tryCatch({
+          ZIP=ZIP.fn(DAT=d,FORMULA=Formulas.ZI[[i]]$P)
+        }, error = function(e) 
+        {
+        })
+        tryCatch({
+          ZINB=ZINB.fn(DAT=d,FORMULA=Formulas.ZI[[i]]$NB)
+        }, error = function(e) 
+        {
+        })
+        
+        tryCatch({
+          Hurdle.Pois=Hurdle.Pois.fn(DAT=d,FORMULA=Formulas.Hu[[i]]$P)
+        }, error = function(e) 
+        {
+        })
+        
+        tryCatch({
+          Hurdle.NB=Hurdle.NB.fn(DAT=d,FORMULA=Formulas.Hu[[i]]$NB)
+        }, error = function(e) 
+        {
+        })
+        
+        return=list(MODS=list(Pois=Pois,NB=NB,ZIP=ZIP,ZINB=ZINB,
+                              Hurdle.Pois=Hurdle.Pois,Hurdle.NB=Hurdle.NB),
+                    DAT=d,
+                    Forms=list(Pois=Formulas,NB=Formulas,
+                               ZIP=Formulas.ZI[[i]]$P,ZINB=Formulas.ZI[[i]]$NB,
+                               Hurdle.Pois=Formulas.Hu[[i]]$P,Hurdle.NB=Formulas.Hu[[i]]$NB))
+      }
+      system.time(for(i in Species.cpue)  #takes 13 seconds
+      {
+        Store[[i]]=fn.chk.error(d=subset(DATA.list[[i]],FixedStation=="YES",select=VARIABLES)) 
+      })
+      
+      #output pdf
+      kmpr.error.pred=function(MOD)
+      {
+        lsm=MOD
+        for(m in 1:length(lsm))
+        {
+          if(!is.null(MOD[[m]]))
+          {
+            lsm[[m]]=summary(emmeans(MOD[[m]],'year', type="response"))
+            names(lsm[[m]])=c("year","mean","SE","df","Low.CI","UP.CI")
+          }
+        }
+        Yrs=as.numeric(as.character(levels(DAT$year)))
+        COL=c("black","grey50","blue","cyan","grey80","cornflowerblue")
+        Dlt=seq(-0.2,.2,length.out = 6)
+        
+        plot(Yrs,Yrs,main="",xlab="",ylab="CPUE",ylim=c(0,min(c(10,max(do.call(rbind,lsm)$UP.CI,na.rm = T)))))
+        for(m in 1:length(lsm))
+        {
+          if(!is.null(MOD[[m]]))
+          {
+            with(lsm[[m]],points(Yrs+Dlt[m],mean,cex=1.25,"o", pch=16, lty=2,col=COL[m]))
+            suppressWarnings(with(lsm[[m]],arrows(x0=Yrs+Dlt[m], y0=Low.CI, x1=Yrs+Dlt[m],
+                                                  y1=UP.CI,code = 3,angle=90,length=.025,col=COL[m])))
+            
+          }
+        }
+        not.converged=names(MOD)[unlist(lapply(MOD,is.null))]
+        ids=match(not.converged,names(MOD))
+        LGn=c("Pois","NB","ZIP","ZINB","HuP","HuNB")
+        LGn[ids]=paste(LGn[ids],"(no convergence)")
+        legend("top",LGn,col=COL,pch=19,bty='n')
+      }
+      kmpr.error.BIC=function(MOD)
+      {
+        id=which(!names(MOD)%in%names(MOD)[unlist(lapply(MOD,is.null))])
+        par(las=3)
+        barplot(unlist(lapply(MOD[id],BIC)),ylab="BIC")
+      }
+      
+      kmpr.error.fit.diag=function(MOD)
+      {
+        #Show coefficients
+        for(m in 1:length(MOD))
+        {
+          if(!is.null(MOD[[m]]))
+          {
+            plot.new()
+            legend('topleft',names(MOD)[m],bty='n')
+            tmp <- round(as.data.frame.matrix(coeftest(MOD[[m]])),3)
+            mytheme <- gridExtra::ttheme_default(
+              core = list(padding=unit(c(1, 1), "mm"),fg_params=list(cex = .5)),
+              colhead = list(fg_params=list(cex = .7)),
+              rowhead = list(fg_params=list(cex = .7)))
+            myt <- gridExtra::tableGrob(tmp, theme = mytheme)
+            grid.draw(myt)
+          }
+        }
+        
+        #Quantiles
+        par(mfcol=c(3,2),las=1,mar=c(3,3,1,1),mgp=c(1.5,.7,0))
+        for(m in 1:length(MOD))
+        {
+          if(!is.null(MOD[[m]])) qqrplot(MOD[[m]], main = names(MOD)[m])
+        }
+        
+        #Rotogram
+        #note: if wave like pattern, then overdispersion in data
+        par(mfcol=c(3,2),las=1,mar=c(3,3,1,1),mgp=c(1.5,.7,0))
+        for(m in 1:length(MOD))
+        {
+          if(!is.null(MOD[[m]])) rootogram(MOD[[m]], main = names(MOD)[m])
+        }
+        
+        
+        #Pearson Residuals (more appropriate for count distributions)
+        par(mfcol=c(3,2),las=1,mar=c(3,3,1,1),mgp=c(1.5,.7,0))
+        for(m in 1:length(MOD))
+        {
+          if(!is.null(MOD[[m]]))
+          {
+            E1=resid(MOD[[m]],type='pearson')
+            hist(E1,xlab="Pearson residuals",main=names(MOD[m]))
+          }
+          if(is.null(MOD[[m]]))
+          {
+            plot(1,col="transparent",ann=F,axes=F)
+            legend("center",paste(names(MOD[m]),"(no convergence)"),bty='n')
+          }
+        }
+      }
+      
+      OverDisp=function(MoD)  #If Overdispersion >> 1, then Poisson...
+      {
+        E1=resid(MoD,type='pearson')
+        Dispersion=sum(E1^2)/MoD$df.resid 
+        if(is.null(MoD))Dispersion=NA
+        return(list(Dispersion=Dispersion))
+      }
+      
+      LOgLik=function(MoD)  #get model Loglikelihood
+      {
+        if(!is.null(MoD))LOgL=logLik(MoD)
+        if(is.null(MoD))LOgL=NA
+        return(LOgL)
+      }
+      
+      fn.AIC=function(MoD)  #get AIC
+      {
+        AIc=NA
+        if(!is.null(MoD)) AIc=AIC(MoD)
+        return(AIc)
+      }
+      fn.AICc=function(DAT)  #get AICc
+      {
+        DAT1=DAT[[1]]
+        AIC.c=NA
+        if(!is.null(DAT1))
+        {
+          Sample.size=dim(model.matrix(DAT1))[1]
+          Num.pars=dim(model.matrix(DAT1))[2]
+          LoGLike=logLik(DAT1)[1]
+          AIC.c=-2*LoGLike+(2*Num.pars*(Sample.size/(Sample.size-Num.pars-1)))
+        }
+        #if(names(DAT)=="Tweed" & !is.null(DAT[[1]])) AIC.c=AICtweedie(DAT[[1]])
+        return(AIC.c)
+      }
+      fn.AIC.ratio=function(DAT)
+      {
+        MIN=min(DAT,na.rm=T)
+        Delta=DAT-MIN
+        Like.model.give.dat=exp(-Delta/2)
+        Weight=Like.model.give.dat/sum(Like.model.give.dat,na.rm=T)
+        id=which(Weight==max(Weight,na.rm=T))
+        names(Weight)=NULL
+        Evidence.ratio=outer(Weight[id],Weight, "/")
+        return(list(Best.Mod=id,Delta=Delta,Like=Like.model.give.dat,Weight=Weight,Evidence.ratio_how.much.better=Evidence.ratio))
+      }
+      
+      Deg.Free=function(MoD)   #get degrees of freedom
+      {
+        if(is.null(MoD$df.residual))return(NA)
+        if(!is.null(MoD$df.residual)) return(MoD$df.residual)  
+      }
+      
+      Get.dev=function(MoD,DAT)
+      {
+        Null.2times.like=Res.2times.like=NA
+        if(!is.null(MoD))
+        {
+          MOD.null=update(MoD,.~1)
+          Null.2times.like=as.numeric(-2*logLik(MOD.null))
+          Res.2times.like=as.numeric(-2*logLik(MoD)) 
+        }
+        return(list(Null.2times.like=Null.2times.like,Res.2times.like=Res.2times.like))
+      }
+      
+      Dsquared <- function(model, adjust = F)
+      {
+        d1=NA
+        d2=NA
+        d3=NA
+        
+        if(!is.null(model$deviance))
+        {
+          d2 <- (model$null.deviance - model$deviance) / model$null.deviance
+          if (adjust)
+          {
+            n <- length(model$fitted.values)
+            p <- length(model$coefficients)
+            d2 <- 1 - ((n - 1) / (n - p)) * (1 - d2)
+          }
+          d3=d2*100
+          d1=model$deviance
+          d2=model$null.deviance
+        }
+        
+        return(list(d1=d1,d2=d2,d3=d3))
+      }
+      
+      Inc.Dev.Exp=function(A,B)round((100*A/B)-100)  #increase in deviance explained from one model to next
+      
+      for(i in Species.cpue)
+      {
+        pdf(paste(hndLs,"/Model selection/Comapre error.",Tar.names[i],".pdf",sep=""))
+        DAT=Store[[i]]$DAT
+        kmpr.error.pred(MOD=Store[[i]]$MODS)
+        rm(DAT)
+        kmpr.error.BIC(MOD=Store[[i]]$MODS)
+        kmpr.error.fit.diag(MOD=Store[[i]]$MODS)
+        
+        
+        #Put model comparisons in table
         MoDs=Store[[i]]$MODS
         Compare=matrix(nrow=9,ncol=length(MoDs))
         colnames(Compare)=names(MoDs)
@@ -2044,693 +2242,746 @@ if(Do.abundance=="YES")
         myt <- gridExtra::tableGrob(Compare, theme = mytheme)
         grid.draw(myt)
         legend('bottom',c(paste("Best.AIC.w=",Best.error.AIC.w),paste("Formula:",Reduce(paste, deparse(Best.formula)))),bty='n',cex=.7)
-      dev.off()
-    }
-    
-
-    #1.11.10. Vuong statistic
-    #note: usefull for comparing non-nested models (e.g. Poisson Vs zero inflated Poisson)
-    #      A large, positive test statistic provides evidence of the superiority of model 1 over model 2,
-    #     while a large, negative test statistic is evidence of the superiority of model 2 over model 1.
-    #     Had to remove Tweedie, not supported by vuong()
-    VUong=function(m1, m2, digits = getOption("digits")) 
-    {
-      if(!is.null(m1) & !is.null(m2))
+        dev.off()
+      }
+      
+      
+      # Vuong statistic
+      #note: usefull for comparing non-nested models (e.g. Poisson Vs zero inflated Poisson)
+      #      A large, positive test statistic provides evidence of the superiority of model 1 over model 2,
+      #     while a large, negative test statistic is evidence of the superiority of model 2 over model 1.
+      #     Had to remove Tweedie, not supported by vuong()
+      VUong=function(m1, m2, digits = getOption("digits")) 
       {
-        m1y <- m1$y
-        m2y <- m2$y
-        m1n <- length(m1y)
-        m2n <- length(m2y)
-        if (m1n == 0 | m2n == 0) 
-          stop("Could not extract dependent variables from models.")
-        if (m1n != m2n) 
-          stop(paste("Models appear to have different numbers of observations.\n", 
-                     "Model 1 has ", m1n, " observations.\n", "Model 2 has ", 
-                     m2n, " observations.\n", sep = ""))
-        if (any(m1y != m2y)) {
-          stop(paste("Models appear to have different values on dependent variables.\n"))
-        }
-        p1 <- predprob(m1)
-        p2 <- predprob(m2)
-        if (!all(colnames(p1) == colnames(p2))) {
-          stop("Models appear to have different values on dependent variables.\n")
-        }
-        whichCol <- match(m1y, colnames(p1))
-        whichCol2 <- match(m2y, colnames(p2))
-        if (!all(whichCol == whichCol2)) {
-          stop("Models appear to have different values on dependent variables.\n")
-        }
-        m1p <- rep(NA, m1n)
-        m2p <- rep(NA, m2n)
-        for (i in 1:m1n) {
-          m1p[i] <- p1[i, whichCol[i]]
-          m2p[i] <- p2[i, whichCol[i]]
-        }
-        k1 <- length(coef(m1))
-        k2 <- length(coef(m2))
-        lm1p <- log(m1p)
-        lm2p <- log(m2p)
-        m <- lm1p - lm2p
-        bad1 <- is.na(lm1p) | is.nan(lm1p) | is.infinite(lm1p)
-        bad2 <- is.na(lm2p) | is.nan(lm2p) | is.infinite(lm2p)
-        bad3 <- is.na(m) | is.nan(m) | is.infinite(m)
-        bad <- bad1 | bad2 | bad3
-        neff <- sum(!bad)
-        if (any(bad)) {
-          cat("NA or numerical zeros or ones encountered in fitted probabilities\n")
-          cat(paste("dropping these", sum(bad), "cases, but proceed with caution\n"))
-        }
-        aic.factor <- (k1 - k2)/neff
-        bic.factor <- (k1 - k2)/(2 * neff) * log(neff)
-        v <- rep(NA, 3)
-        arg1 <- matrix(m[!bad], nrow = neff, ncol = 3, byrow = FALSE)
-        arg2 <- matrix(c(0, aic.factor, bic.factor), nrow = neff, 
-                       ncol = 3, byrow = TRUE)
-        num <- arg1 - arg2
-        s <- apply(num, 2, sd)
-        numsum <- apply(num, 2, sum)
-        v <- numsum/(s * sqrt(neff))
-        names(v) <- c("Raw", "AIC-corrected", "BIC-corrected")
-        pval <- rep(NA, 3)
-        msg <- rep("", 3)
-        for (j in 1:3) {
-          if (v[j] > 0) {
-            pval[j] <- 1 - pnorm(v[j])
-            msg[j] <- "model1 > model2"
+        if(!is.null(m1) & !is.null(m2))
+        {
+          m1y <- m1$y
+          m2y <- m2$y
+          m1n <- length(m1y)
+          m2n <- length(m2y)
+          if (m1n == 0 | m2n == 0) 
+            stop("Could not extract dependent variables from models.")
+          if (m1n != m2n) 
+            stop(paste("Models appear to have different numbers of observations.\n", 
+                       "Model 1 has ", m1n, " observations.\n", "Model 2 has ", 
+                       m2n, " observations.\n", sep = ""))
+          if (any(m1y != m2y)) {
+            stop(paste("Models appear to have different values on dependent variables.\n"))
           }
-          else {
-            pval[j] <- pnorm(v[j])
-            msg[j] <- "model2 > model1"
+          p1 <- predprob(m1)
+          p2 <- predprob(m2)
+          if (!all(colnames(p1) == colnames(p2))) {
+            stop("Models appear to have different values on dependent variables.\n")
           }
+          whichCol <- match(m1y, colnames(p1))
+          whichCol2 <- match(m2y, colnames(p2))
+          if (!all(whichCol == whichCol2)) {
+            stop("Models appear to have different values on dependent variables.\n")
+          }
+          m1p <- rep(NA, m1n)
+          m2p <- rep(NA, m2n)
+          for (i in 1:m1n) {
+            m1p[i] <- p1[i, whichCol[i]]
+            m2p[i] <- p2[i, whichCol[i]]
+          }
+          k1 <- length(coef(m1))
+          k2 <- length(coef(m2))
+          lm1p <- log(m1p)
+          lm2p <- log(m2p)
+          m <- lm1p - lm2p
+          bad1 <- is.na(lm1p) | is.nan(lm1p) | is.infinite(lm1p)
+          bad2 <- is.na(lm2p) | is.nan(lm2p) | is.infinite(lm2p)
+          bad3 <- is.na(m) | is.nan(m) | is.infinite(m)
+          bad <- bad1 | bad2 | bad3
+          neff <- sum(!bad)
+          if (any(bad)) {
+            cat("NA or numerical zeros or ones encountered in fitted probabilities\n")
+            cat(paste("dropping these", sum(bad), "cases, but proceed with caution\n"))
+          }
+          aic.factor <- (k1 - k2)/neff
+          bic.factor <- (k1 - k2)/(2 * neff) * log(neff)
+          v <- rep(NA, 3)
+          arg1 <- matrix(m[!bad], nrow = neff, ncol = 3, byrow = FALSE)
+          arg2 <- matrix(c(0, aic.factor, bic.factor), nrow = neff, 
+                         ncol = 3, byrow = TRUE)
+          num <- arg1 - arg2
+          s <- apply(num, 2, sd)
+          numsum <- apply(num, 2, sum)
+          v <- numsum/(s * sqrt(neff))
+          names(v) <- c("Raw", "AIC-corrected", "BIC-corrected")
+          pval <- rep(NA, 3)
+          msg <- rep("", 3)
+          for (j in 1:3) {
+            if (v[j] > 0) {
+              pval[j] <- 1 - pnorm(v[j])
+              msg[j] <- "model1 > model2"
+            }
+            else {
+              pval[j] <- pnorm(v[j])
+              msg[j] <- "model2 > model1"
+            }
+          }
+          out <- data.frame(v, msg, format.pval(pval))
+          names(out) <- c("Vuong.z.statistic", "H_A", "p.value")
+          
+          return(out)
         }
-        out <- data.frame(v, msg, format.pval(pval))
-        names(out) <- c("Vuong.z.statistic", "H_A", "p.value")
-        
-        return(out)
-      }
-      if(is.null(m1) | is.null(m2))
-      {
-        out=data.frame('Vuong z-statistic'=NA,'H_A'=NA,'p-value'=NA)
-        return(out)
-      }
- 
-    }
-    Store.vuong=vector('list',length(Species.cpue))
-    for(n in Species.cpue)
-    {
-      MOD=Store[[n]]$MODS
-      
-      if(!is.null(MOD))
-      {
-        if("Tweed"%in%names(names(MOD)))MOD=MOD[-match("Tweed",names(MOD))]
-        PAirs=combn(1:length(MOD), 2)
-        Names.pairs=combn(names(MOD), 2)
-        NaMes=rep(NA,ncol(PAirs));for(x in  1:ncol(PAirs))NaMes[x]=paste(Names.pairs[1,x],"vs",Names.pairs[2,x])
-        dummy=vector('list',ncol(PAirs))
-        for(p in 1:ncol(PAirs))
+        if(is.null(m1) | is.null(m2))
         {
-           dummy[[p]]=cbind(Comparison=NaMes[p],VUong(MOD[[PAirs[,p][1]]],MOD[[PAirs[,p][2]]]))
-        }
-        Store.vuong[[n]]=cbind(Species=names(Store)[n],do.call(rbind,dummy))
-      }
-    }
-    Vuong.table=do.call(rbind,Store.vuong)
-    write.csv(Vuong.table,paste(hndLs,"Model selection/Voung.compare.models.csv",sep=""))
-    Compas=unique(Vuong.table$Comparison)
-    fn.compr.vuong=function(SP,XX)
-    {
-      dd=subset(Vuong.table, Species==SP )
-      dd$dummy=substr(row.names(dd),1,3)
-      dd=subset(dd,dummy==XX)
-      dd$p.value=as.numeric(as.character(dd$p.value))
-      
-      Misn=Compas[which(!Compas%in%dd$Comparison)]
-      if(length(Misn)>0)
-      {
-        Add=dd[1:length(Misn),]
-        Add[,]=NA
-        Add$Comparison=Misn
-        dd=rbind(dd,Add)
-        dd=dd[match(Compas,dd$Comparison),]
-      }
-      
-      dd$shape=with(dd,ifelse(H_A=="model2 > model1",21,ifelse(H_A=="model1 > model2",24,NA)))
-      dd$col=with(dd,ifelse(p.value>=0.05,"grey95",
-                     ifelse(p.value<0.05 & p.value>=0.01,"grey60",
-                     ifelse(p.value<0.01 & p.value>=0.001,"grey30",
-                            ifelse(p.value<0.001,"black",NA)))))  
-      points(1:15,rep(i,15),pch=dd$shape,bg=dd$col,cex=3)
-    }
-    VuOn.sp=as.character(unique(Vuong.table$Species))
-    Voung.metrics=c("Raw","AIC","BIC")
-    for(v in 1:length(Voung.metrics))
-    {
-      fn.fig(paste(hndLs,"Model selection/Voung.compare_",Voung.metrics[v],sep=""),2400,2400)
-      par(mar=c(2,2,3,1),oma=c(6,5.5,.1,.1),las=1,mgp=c(2.5,.7,0),xpd=TRUE)
-      plot(1:15,1:15,col="transparent",ylab="",xlab="",xaxt='n',yaxt='n',ylim=c(1,length(VuOn.sp)))
-      axis(1,1:15,Compas,las=3,cex.axis=.75)
-      axis(2,1:length(VuOn.sp),VuOn.sp,las=1,cex.axis=.75)
-      for(i in 1:length(VuOn.sp)) fn.compr.vuong(SP=VuOn.sp[i],XX=Voung.metrics[v])
-      legend("topright", inset=c(0,-0.1), legend=c("model2 > model1","model1 > model2"), 
-             pch=c(21,24), bg="white", bty='n',pt.cex = 1.5)
-      legend("topleft", inset=c(0,-0.1), legend=c("p>=0.05 ","p<0.05 ","p<0.01","p<0.001"), 
-             pch=22, pt.bg=c("grey95","grey60","grey30","black"), bty='n',horiz=T,pt.cex = 1.5)
-      dev.off()
-    }
-  }
-  
-  #1.11.4. Compare model terms for each error using AIC, etc
-  if(Select.error.AIC=="YES")
-  {
-    # calculate AIC weights and ratios
-    fn.AIC.ratio=function(DAT)
-    {
-      MIN=min(DAT,na.rm=T)
-      Delta=DAT-MIN
-      Like.model.give.dat=exp(-Delta/2)
-      Weight=Like.model.give.dat/sum(Like.model.give.dat,na.rm=T)
-      id=which(Weight==max(Weight,na.rm=T))
-      names(Weight)=NULL
-      Evidence.ratio=outer(Weight[id],Weight, "/")
-      return(list(Best.Mod=id,Delta=Delta,Like=Like.model.give.dat,Weight=Weight,Evidence.ratio_how.much.better=Evidence.ratio))
-    }
-    
-    #Deviance explained
-    #note: this doesn't work for zero inflated models. Zero-inflated models are not associated 
-    #       with a deviance in the GLM sense. They are a mixture of two models rather 
-    #       than a single model from an exponential family. Hence, zeroinfl/hurdle in "pscl" 
-    #       reports the log-likelihood but not the deviance. Possibly -2 times the likelihood is
-    
-    # adjust: logical, whether or not to use the adjusted deviance taking into 
-    #acount the nr of observations and parameters (Weisberg 1980; Guisan & Zimmermann 2000)
-    
-    
-    Get.dev=function(MOD,MOD.null) as.numeric(-2*(logLik(MOD.null)-logLik(MOD)))
-    
-    Dsquared <- function(model, adjust = F)
-    {
-      if(!is.null(model$deviance))
-      {
-        d2 <- (model$null.deviance - model$deviance) / model$null.deviance
-        if (adjust)
-        {
-          n <- length(model$fitted.values)
-          p <- length(model$coefficients)
-          d2 <- 1 - ((n - 1) / (n - p)) * (1 - d2)
-        }
-        d3=d2*100
-        d1=model$deviance
-        d2=model$null.deviance
-      }
-      
-      if(is.null(model$deviance))
-      {
-        d1=NA
-        d2=NA
-        d3=NA
-      }
-      return(list(d1=d1,d2=d2,d3=d3))
-    }
-    
-    #increase in deviance explained from one model to next
-    Inc.Dev.Exp=function(A,B)round((100*A/B)-100)
-    
-    
-    #LikeRatio test
-    fun.LRT=function(MOD)drop1(MOD,test="Chi")
-    #fn.LRT1=function(MOD) anova(POIS[[1]],POIS[[2]],POIS[[3]],POIS[[4]], test="Chisq")
-    #fn.LRT2=function(MOD) lrtest(POIS[[1]],POIS[[2]],POIS[[3]],POIS[[4]])
-    # Like.Ratio1=Like.Ratio2=Dev.explained
-    # for(i in 1:N.species)Like.Ratio1[[i]]=fn.LRT1(MODELS[[i]])
-    # for(i in 1:N.species)Like.Ratio2[[i]]=fn.LRT2(MODELS[[i]])
-
-    
-    if(Select.term=="YES")
-    {
-      #fit nested models for mixture models         Missing: see Zuu et al 2012 page 194
-      
-      for (i in Species.cpue)
-      {
-        Full.ZI=Formulas.ZI[[i]][[length(Formulas.ZI[[i]])]]
-        Full.Hu=Formulas.Hu[[i]][[length(Formulas.Hu[[i]])]]
-      }
-      
-      
-      
-      #2.6.4 Store comparisons
-      Store.compare.terms=vector('list',N.species)
-      names(Store.compare.terms)=names(DATA.list)
-      for(i in Species.cpue)
-      {
-        #1.Count
-        COUNT=Store.count[[i]]
-        NC=length(COUNT)
-        POIS=NB=vector("list",NC)
-        for(z in 1:NC)
-        {
-          POIS[[z]]=COUNT[[z]]$Pois
-          NB[[z]]=COUNT[[z]]$NB
+          out=data.frame('Vuong z-statistic'=NA,'H_A'=NA,'p-value'=NA)
+          return(out)
         }
         
-        #get AICs
-        Pois.AIC.w.r=fn.AIC.ratio(unlist(sapply(POIS,AIC)))
-        NB.AIC.w.r=fn.AIC.ratio(unlist(sapply(NB,AIC)))
+      }
+      Store.vuong=vector('list',length(Species.cpue))
+      for(n in Species.cpue)
+      {
+        MOD=Store[[n]]$MODS
         
-        #LikeRatio test
-        LR.POIS=fun.LRT(POIS[[NC]])
-        LR.NB=fun.LRT(NB[[NC]])
-        
-        #Deviance explained
-        store.deviance=vector("list",NC)
-        for(z in 1:NC)store.deviance[[z]]=Dsquared(POIS[[z]],adjust=T)$d3
-        Pois.dev.expl=do.call(cbind,store.deviance)
-        for(z in 1:NC)store.deviance[[z]]=Dsquared(NB[[z]],adjust=T)$d3
-        NB.dev.expl=do.call(cbind,store.deviance)
-        
-        
-        #2.Zero inflated
-        ZERO=Store.count.ZI[[i]]
-        NC=length(ZERO)
-        POIS=NB=vector("list",NC)
-        for(z in 1:NC)
+        if(!is.null(MOD))
         {
-          POIS[[z]]=ZERO[[z]]$ZIP
-          NB[[z]]=ZERO[[z]]$ZINB
+          if("Tweed"%in%names(names(MOD)))MOD=MOD[-match("Tweed",names(MOD))]
+          PAirs=combn(1:length(MOD), 2)
+          Names.pairs=combn(names(MOD), 2)
+          NaMes=rep(NA,ncol(PAirs));for(x in  1:ncol(PAirs))NaMes[x]=paste(Names.pairs[1,x],"vs",Names.pairs[2,x])
+          dummy=vector('list',ncol(PAirs))
+          for(p in 1:ncol(PAirs))
+          {
+            dummy[[p]]=cbind(Comparison=NaMes[p],VUong(MOD[[PAirs[,p][1]]],MOD[[PAirs[,p][2]]]))
+          }
+          Store.vuong[[n]]=cbind(Species=names(Store)[n],do.call(rbind,dummy))
+        }
+      }
+      Vuong.table=do.call(rbind,Store.vuong)
+      write.csv(Vuong.table,paste(hndLs,"Model selection/Voung.compare.models.csv",sep=""))
+      Compas=unique(Vuong.table$Comparison)
+      fn.compr.vuong=function(SP,XX)
+      {
+        dd=subset(Vuong.table, Species==SP )
+        dd$dummy=substr(row.names(dd),1,3)
+        dd=subset(dd,dummy==XX)
+        dd$p.value=as.numeric(as.character(dd$p.value))
+        
+        Misn=Compas[which(!Compas%in%dd$Comparison)]
+        if(length(Misn)>0)
+        {
+          Add=dd[1:length(Misn),]
+          Add[,]=NA
+          Add$Comparison=Misn
+          dd=rbind(dd,Add)
+          dd=dd[match(Compas,dd$Comparison),]
         }
         
-        #get AICs
-        ZIP.AIC.w.r=fn.AIC.ratio(unlist(sapply(POIS,AIC)))
-        ZINB.AIC.w.r=fn.AIC.ratio(unlist(sapply(NB,AIC)))
-        
-        #LikeRatio test     #MISSING: here goes ZUU page 194
-        LR.ZIP=NULL
-        LR.ZINB=NULL
-        
-        #Deviance explained   NA for Zero inflated models
-        ZIP.dev.expl=NULL
-        ZINB.dev.expl=NULL
-        
-        
-        #3.Tweedie
-        TWEEDIE=Store.count.Twee[[i]]
-        NC=length(TWEEDIE)
-        
-        Tweedie.AIC.w.r=NA
-        LR.TWEEDIE=NA
-        TWEEDIE.dev.expl=NA
-        
-        if(!is.null(TWEEDIE[[1]]$Tweed))
+        dd$shape=with(dd,ifelse(H_A=="model2 > model1",21,ifelse(H_A=="model1 > model2",24,NA)))
+        dd$col=with(dd,ifelse(p.value>=0.05,"grey95",
+                              ifelse(p.value<0.05 & p.value>=0.01,"grey60",
+                                     ifelse(p.value<0.01 & p.value>=0.001,"grey30",
+                                            ifelse(p.value<0.001,"black",NA)))))  
+        points(1:15,rep(i,15),pch=dd$shape,bg=dd$col,cex=3)
+      }
+      VuOn.sp=as.character(unique(Vuong.table$Species))
+      Voung.metrics=c("Raw","AIC","BIC")
+      for(v in 1:length(Voung.metrics))
+      {
+        fn.fig(paste(hndLs,"Model selection/Voung.compare_",Voung.metrics[v],sep=""),2400,2400)
+        par(mar=c(2,2,3,1),oma=c(6,5.5,.1,.1),las=1,mgp=c(2.5,.7,0),xpd=TRUE)
+        plot(1:15,1:15,col="transparent",ylab="",xlab="",xaxt='n',yaxt='n',ylim=c(1,length(VuOn.sp)))
+        axis(1,1:15,Compas,las=3,cex.axis=.75)
+        axis(2,1:length(VuOn.sp),VuOn.sp,las=1,cex.axis=.75)
+        for(i in 1:length(VuOn.sp)) fn.compr.vuong(SP=VuOn.sp[i],XX=Voung.metrics[v])
+        legend("topright", inset=c(0,-0.1), legend=c("model2 > model1","model1 > model2"), 
+               pch=c(21,24), bg="white", bty='n',pt.cex = 1.5)
+        legend("topleft", inset=c(0,-0.1), legend=c("p>=0.05 ","p<0.05 ","p<0.01","p<0.001"), 
+               pch=22, pt.bg=c("grey95","grey60","grey30","black"), bty='n',horiz=T,pt.cex = 1.5)
+        dev.off()
+      }
+    }
+    
+    # Compare model terms for each error using AIC, etc
+    if(Select.error.AIC=="YES")
+    {
+      # calculate AIC weights and ratios
+      fn.AIC.ratio=function(DAT)
+      {
+        MIN=min(DAT,na.rm=T)
+        Delta=DAT-MIN
+        Like.model.give.dat=exp(-Delta/2)
+        Weight=Like.model.give.dat/sum(Like.model.give.dat,na.rm=T)
+        id=which(Weight==max(Weight,na.rm=T))
+        names(Weight)=NULL
+        Evidence.ratio=outer(Weight[id],Weight, "/")
+        return(list(Best.Mod=id,Delta=Delta,Like=Like.model.give.dat,Weight=Weight,Evidence.ratio_how.much.better=Evidence.ratio))
+      }
+      
+      #Deviance explained
+      #note: this doesn't work for zero inflated models. Zero-inflated models are not associated 
+      #       with a deviance in the GLM sense. They are a mixture of two models rather 
+      #       than a single model from an exponential family. Hence, zeroinfl/hurdle in "pscl" 
+      #       reports the log-likelihood but not the deviance. Possibly -2 times the likelihood is
+      
+      # adjust: logical, whether or not to use the adjusted deviance taking into 
+      #acount the nr of observations and parameters (Weisberg 1980; Guisan & Zimmermann 2000)
+      
+      
+      Get.dev=function(MOD,MOD.null) as.numeric(-2*(logLik(MOD.null)-logLik(MOD)))
+      
+      Dsquared <- function(model, adjust = F)
+      {
+        if(!is.null(model$deviance))
         {
+          d2 <- (model$null.deviance - model$deviance) / model$null.deviance
+          if (adjust)
+          {
+            n <- length(model$fitted.values)
+            p <- length(model$coefficients)
+            d2 <- 1 - ((n - 1) / (n - p)) * (1 - d2)
+          }
+          d3=d2*100
+          d1=model$deviance
+          d2=model$null.deviance
+        }
+        
+        if(is.null(model$deviance))
+        {
+          d1=NA
+          d2=NA
+          d3=NA
+        }
+        return(list(d1=d1,d2=d2,d3=d3))
+      }
+      
+      #increase in deviance explained from one model to next
+      Inc.Dev.Exp=function(A,B)round((100*A/B)-100)
+      
+      
+      #LikeRatio test
+      fun.LRT=function(MOD)drop1(MOD,test="Chi")
+      #fn.LRT1=function(MOD) anova(POIS[[1]],POIS[[2]],POIS[[3]],POIS[[4]], test="Chisq")
+      #fn.LRT2=function(MOD) lrtest(POIS[[1]],POIS[[2]],POIS[[3]],POIS[[4]])
+      # Like.Ratio1=Like.Ratio2=Dev.explained
+      # for(i in 1:N.species)Like.Ratio1[[i]]=fn.LRT1(MODELS[[i]])
+      # for(i in 1:N.species)Like.Ratio2[[i]]=fn.LRT2(MODELS[[i]])
+      
+      
+      if(Select.term=="YES")
+      {
+        #fit nested models for mixture models         Missing: see Zuu et al 2012 page 194
+        
+        for (i in Species.cpue)
+        {
+          Full.ZI=Formulas.ZI[[i]][[length(Formulas.ZI[[i]])]]
+          Full.Hu=Formulas.Hu[[i]][[length(Formulas.Hu[[i]])]]
+        }
+        
+        
+        
+        #2.6.4 Store comparisons
+        Store.compare.terms=vector('list',N.species)
+        names(Store.compare.terms)=names(DATA.list)
+        for(i in Species.cpue)
+        {
+          #1.Count
+          COUNT=Store.count[[i]]
+          NC=length(COUNT)
+          POIS=NB=vector("list",NC)
+          for(z in 1:NC)
+          {
+            POIS[[z]]=COUNT[[z]]$Pois
+            NB[[z]]=COUNT[[z]]$NB
+          }
+          
           #get AICs
-          aic.twee=rep(NA,NC)
-          for(z in 1:NC) aic.twee[z]=AICtweedie(TWEEDIE[[z]][[1]])
-          Tweedie.AIC.w.r=fn.AIC.ratio(aic.twee)
+          Pois.AIC.w.r=fn.AIC.ratio(unlist(sapply(POIS,AIC)))
+          NB.AIC.w.r=fn.AIC.ratio(unlist(sapply(NB,AIC)))
           
           #LikeRatio test
-          LR.TWEEDIE=fun.LRT(TWEEDIE[[NC]][[1]])
+          LR.POIS=fun.LRT(POIS[[NC]])
+          LR.NB=fun.LRT(NB[[NC]])
           
           #Deviance explained
           store.deviance=vector("list",NC)
-          for(z in 1:NC)store.deviance[[z]]=Dsquared(TWEEDIE[[z]][[1]],adjust=T)$d3
-          TWEEDIE.dev.expl=do.call(cbind,store.deviance)
-          
-        }
-        
-        
-        #4.Hurdle
-        HURDLE=Store.count.Hur[[i]]
-        NC=length(HURDLE)
-        POIS=NB=vector("list",NC)
-        for(z in 1:NC)
-        {
-          POIS[[z]]=HURDLE[[z]]$Hurdle.Pois
-          NB[[z]]=HURDLE[[z]]$Hurdle.NB
-        }
-        
-        #get AICs
-        Hur.P.AIC.w.r=fn.AIC.ratio(unlist(sapply(POIS,AIC)))
-        Hur.NB.AIC.w.r=fn.AIC.ratio(unlist(sapply(NB,AIC)))
-        
-        #LikeRatio test     #MISSING: here goes ZUU page 194
-        LR.Hur.P=NULL
-        LR.Hur.NB=NULL
-        
-        #Deviance explained   NA for Zero inflated models
-        Hur.P.dev.expl=NULL
-        Hur.NB.dev.expl=NULL
-        
-        
-        #Store everything
-        Store.compare.terms[[i]]=list(Pois.AIC.w.r=Pois.AIC.w.r,NB.AIC.w.r=NB.AIC.w.r,LR.POIS=LR.POIS,LR.NB=LR.NB,
-                                      Pois.dev.expl=Pois.dev.expl,NB.dev.expl=NB.dev.expl,ZIP.AIC.w.r=ZIP.AIC.w.r,ZINB.AIC.w.r=ZINB.AIC.w.r,
-                                      LR.ZIP=LR.ZIP,LR.ZINB=LR.ZINB,ZIP.dev.expl=ZIP.dev.expl,ZINB.dev.expl=ZINB.dev.expl,
-                                      Tweedie.AIC.w.r=Tweedie.AIC.w.r,LR.TWEEDIE=LR.TWEEDIE,TWEEDIE.dev.expl=TWEEDIE.dev.expl,
-                                      Hur.P.AIC.w.r=Hur.P.AIC.w.r,Hur.NB.AIC.w.r=Hur.NB.AIC.w.r,LR.Hur.P=LR.Hur.P,
-                                      LR.Hur.NB=LR.Hur.NB,Hur.P.dev.expl=Hur.P.dev.expl,Hur.NB.dev.expl=Hur.NB.dev.expl)
-      }
-      
-    }
-    
-    
-    #Select error structure
-    
-    #FORMULAS
-    
-    #Poisson and NB
-    Best.count.form=list(
-      NULL,
-      as.formula(Catch.Target ~ year + BOTDEPTH + Mid.Lat +  SOI+ offset(log.Effort)),
-      as.formula(Catch.Target ~ year + BOTDEPTH + Mid.Lat +  offset(log.Effort)),
-      NULL,
-      as.formula(Catch.Target ~ year +  Mid.Lat +  offset(log.Effort)),
-      as.formula(Catch.Target ~ year +  Mid.Lat +  Moon + offset(log.Effort)),
-      as.formula(Catch.Target ~ year + Moon + Mid.Lat +  SOI+ offset(log.Effort)))
-    names(Best.count.form)=names(DATA.list)
-    
-    #Zero Inflated
-    Best.ZI.form=list(
-      NULL,
-      as.formula(Catch.Target ~ year + BOTDEPTH + Mid.Lat+ offset(log.Effort)|year + Mid.Lat+ offset(log.Effort)),
-      as.formula(Catch.Target ~ year +  Moon+ Mid.Lat+ offset(log.Effort)|year +BOTDEPTH+ Mid.Lat+ offset(log.Effort)),
-      NULL,
-      as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ Mid.Lat+ offset(log.Effort)|year + Moon+ offset(log.Effort)),
-      as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ Mid.Lat+ offset(log.Effort)|year + Mid.Lat+ offset(log.Effort)),
-      as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ Mid.Lat+ offset(log.Effort)|year + Mid.Lat+ offset(log.Effort)))
-    
-    #Tweedie
-    Best.Twee.form=list(
-      NULL,
-      as.formula(Catch.Target ~ year + BOTDEPTH + Mid.Lat + SOI + offset(log.Effort)),
-      NULL,
-      NULL,
-      NULL,
-      NULL,
-      as.formula(Catch.Target ~ year + Moon + Mid.Lat + SOI + offset(log.Effort)))
-    
-    
-    #Hurdle
-    Best.HU.Pois.form=list(
-      NULL,
-      as.formula(Catch.Target ~ year + BOTDEPTH + Moon + Mid.Lat + SOI + offset(log.Effort)),
-      as.formula(Catch.Target ~ BOTDEPTH +Moon+Mid.Lat+SOI+ offset(log.Effort) | year + BOTDEPTH+Moon+Mid.Lat+SOI+ offset(log.Effort)),
-      NULL,
-      as.formula(Catch.Target ~ year + BOTDEPTH + Moon + Mid.Lat + SOI + offset(log.Effort)),
-      as.formula(Catch.Target ~ year + BOTDEPTH + Moon + Mid.Lat + offset(log.Effort)),
-      as.formula(Catch.Target ~ year + BOTDEPTH + Moon + Mid.Lat + SOI + offset(log.Effort)))
-    
-    Best.HU.NB.form=Best.HU.Pois.form
-    Best.HU.NB.form[[5]]=Catch.Target ~ year + BOTDEPTH + Moon + Mid.Lat + offset(log.Effort)
-    
-    
-  }
-  
-  #1.11.12. K-fold cross validation
-  if(Do.K.fold.test=="YES")
-  {
-    #formulas of each species and each error structure
-    THESE=Best.count.form
-    
-    THESE$Sandbar=list(Pois=c("Catch.Target","year","BOTDEPTH","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
-                       NB=c("Catch.Target","year","BOTDEPTH","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
-                       ZIP=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
-                       ZINB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),                   
-                       Twee=c("Catch.Target","year","BOTDEPTH","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
-                       Hu.P=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
-                       Hu.NB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"))
-    
-    
-    THESE$Tiger=list(Pois=c("Catch.Target","year","BOTDEPTH","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
-                     NB=c("Catch.Target","year","BOTDEPTH","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
-                     ZIP=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
-                     ZINB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),                   
-                     Twee=c("Catch.Target","year","BOTDEPTH","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
-                     Hu.P=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
-                     Hu.NB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"))
-    
-    THESE$Blacktip=list(Pois=c("Catch.Target","year","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
-                        NB=c("Catch.Target","year","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
-                        ZIP=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
-                        ZINB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),                   
-                        Twee=c("Catch.Target","year","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
-                        Hu.P=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
-                        Hu.NB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"))
-    
-    THESE$SpotTail=list(Pois=c("Catch.Target","year","Mid.Lat","Moon","N.hooks.Fixed","SOAK.TIME"),
-                        NB=c("Catch.Target","year","Mid.Lat","Moon","N.hooks.Fixed","SOAK.TIME"),
-                        ZIP=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
-                        ZINB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),                   
-                        Twee=c("Catch.Target","year","Mid.Lat","Moon","N.hooks.Fixed","SOAK.TIME"),
-                        Hu.P=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
-                        Hu.NB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"))
-    
-    THESE$Milk=list(Pois=c("Catch.Target","year","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
-                    NB=c("Catch.Target","year","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
-                    ZIP=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
-                    ZINB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),                   
-                    Twee=c("Catch.Target","year","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
-                    Hu.P=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
-                    Hu.NB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"))
-    
-    
-    
-    K=20
-    training.data=0.95 #training subset (95% of data)
-    
-    
-    
-    fn.cor=function(OBS,PREDS)
-    {
-      CORE=NULL
-      if(!is.null(FITS[[a]]))CORE=cor(OBS,PREDS,method='pearson')
-      return(list(CORE=CORE))
-    }
-    fn.RMSE=function(OBS,PREDS)
-    {
-      CORE=NULL
-      if(!is.null(FITS[[a]]))CORE=sqrt(mean((PREDS-OBS)^2))/Rng.obs
-      return(list(CORE=CORE))
-    }
-    
-    fn.best.error.k_fold=function(DAT,FORMULA,FORMULA.ZI,FORMULA.Twee,FORMULA.Hu.P,FORMULA.Hu.NB,These)
-    {
-      
-      # 1. Put data in proper shape
-      DataFile=DAT[,match(VARIABLES,names(DAT))]
-      
-      # 2. select training subsets
-      id=round(nrow(DataFile)*training.data)
-      list.ID=list()
-      for(t in 1:K)list.ID[[t]]=sort(sample(1:nrow(DataFile),id,replace =F))
-      
-      
-      #3. loop for k-fold validation
-      Cor=RMSE=TEST=PREDS=vector('list',length=K)
-      
-      for(k in 1:K)
-      {
-        tryCatch({
-          # 3.1. select data subsets
-          All.data.train=DataFile[list.ID[[k]],]
-          All.data.test=DataFile[-list.ID[[k]],]
+          for(z in 1:NC)store.deviance[[z]]=Dsquared(POIS[[z]],adjust=T)$d3
+          Pois.dev.expl=do.call(cbind,store.deviance)
+          for(z in 1:NC)store.deviance[[z]]=Dsquared(NB[[z]],adjust=T)$d3
+          NB.dev.expl=do.call(cbind,store.deviance)
           
           
-          # 3.2. Fit different error structures to training subset
-          DAT=All.data.train
-          DAT$year=as.factor(DAT$year)
-          DAT$log.Effort=log(DAT$N.hooks.Fixed*DAT$SOAK.TIME)
-          
-          #GLM
-          #Count models
-          Pois=glm(FORMULA,data=DAT,family="poisson")
-          NB=glm.nb(FORMULA, data = DAT)
-          
-          #Zero inflated models
-          #ZIP=NULL
-          ZIP <- zeroinfl(FORMULA.ZI, data = DAT, dist = "poisson")
-          #ZINB=NULL
-          ZINB <- zeroinfl(FORMULA.ZI, data = DAT, dist = "negbin")
-          
-          Tweed=NULL
-          if(i %in%c(2,7))
+          #2.Zero inflated
+          ZERO=Store.count.ZI[[i]]
+          NC=length(ZERO)
+          POIS=NB=vector("list",NC)
+          for(z in 1:NC)
           {
-            #Tweedie
-            # 1.Find p value thru likelihood profiling
-            #note: expect  xi  about 1.5
-            P.eval=seq(1.1, 1.9, length=9)
-            out <- tweedie.profile(FORMULA.Twee,xi.vec=P.eval,data=DAT, do.plot=F)
-            P=out$xi.max
-            
-            # 2.Fit the glm
-            Tweed=glm( FORMULA.Twee,data=DAT, family=tweedie(var.power=P, link.power=0) )
+            POIS[[z]]=ZERO[[z]]$ZIP
+            NB[[z]]=ZERO[[z]]$ZINB
           }
           
-          #Hurdle modles
-          Hurdle.Pois = hurdle(FORMULA.Hu.P, data = DAT , dist="poisson")
-          Hurdle.NB = hurdle(FORMULA.Hu.NB, data = DAT , dist="negbin")
+          #get AICs
+          ZIP.AIC.w.r=fn.AIC.ratio(unlist(sapply(POIS,AIC)))
+          ZINB.AIC.w.r=fn.AIC.ratio(unlist(sapply(NB,AIC)))
           
-          FITS=list(Pois=Pois,NB=NB,ZIP=ZIP, ZINB=ZINB,Tweed=Tweed,Hurdle.Pois=Hurdle.Pois,
-                    Hurdle.NB=Hurdle.NB)  
+          #LikeRatio test     #MISSING: here goes ZUU page 194
+          LR.ZIP=NULL
+          LR.ZINB=NULL
           
-          # 3.3. Predict test.data  
-          Store.Preds=vector('list',length(FITS))
-          names(Store.Preds)=names(FITS)
-          for (a in 1:length(FITS))Store.Preds[[a]]=Pred.Model(FITS[[a]],All.data.test[,match(These[[a]],names(All.data.test))])
-          
-          #Store quantities
-          TEST[[k]]=All.data.test
-          PREDS[[k]]=Store.Preds
+          #Deviance explained   NA for Zero inflated models
+          ZIP.dev.expl=NULL
+          ZINB.dev.expl=NULL
           
           
-          # 3.4. Measure fit
+          #3.Tweedie
+          TWEEDIE=Store.count.Twee[[i]]
+          NC=length(TWEEDIE)
           
-          #3.4.1 Correlation
-          Store.Corr=vector('list',length(FITS))
-          names(Store.Corr)=names(FITS)      
-          for (a in 1:length(FITS))Store.Corr[[a]]=fn.cor(All.data.test$Catch.Target,Store.Preds[[a]]$PREDS)
-          Cor[[k]]=Store.Corr
+          Tweedie.AIC.w.r=NA
+          LR.TWEEDIE=NA
+          TWEEDIE.dev.expl=NA
+          
+          if(!is.null(TWEEDIE[[1]]$Tweed))
+          {
+            #get AICs
+            aic.twee=rep(NA,NC)
+            for(z in 1:NC) aic.twee[z]=AICtweedie(TWEEDIE[[z]][[1]])
+            Tweedie.AIC.w.r=fn.AIC.ratio(aic.twee)
+            
+            #LikeRatio test
+            LR.TWEEDIE=fun.LRT(TWEEDIE[[NC]][[1]])
+            
+            #Deviance explained
+            store.deviance=vector("list",NC)
+            for(z in 1:NC)store.deviance[[z]]=Dsquared(TWEEDIE[[z]][[1]],adjust=T)$d3
+            TWEEDIE.dev.expl=do.call(cbind,store.deviance)
+            
+          }
           
           
-          #3.4.2 Normalised RMSE
-          Store.RMSE=vector('list',length(FITS))
-          names(Store.RMSE)=names(FITS)
-          Rng.obs=range(All.data.test$Catch.Target)[2]-range(All.data.test$Catch.Target)[1]       
-          for (a in 1:length(FITS))Store.RMSE[[a]]=fn.RMSE(All.data.test$Catch.Target,Store.Preds[[a]]$PREDS)      
-          RMSE[[k]]=Store.RMSE
+          #4.Hurdle
+          HURDLE=Store.count.Hur[[i]]
+          NC=length(HURDLE)
+          POIS=NB=vector("list",NC)
+          for(z in 1:NC)
+          {
+            POIS[[z]]=HURDLE[[z]]$Hurdle.Pois
+            NB[[z]]=HURDLE[[z]]$Hurdle.NB
+          }
+          
+          #get AICs
+          Hur.P.AIC.w.r=fn.AIC.ratio(unlist(sapply(POIS,AIC)))
+          Hur.NB.AIC.w.r=fn.AIC.ratio(unlist(sapply(NB,AIC)))
+          
+          #LikeRatio test     #MISSING: here goes ZUU page 194
+          LR.Hur.P=NULL
+          LR.Hur.NB=NULL
+          
+          #Deviance explained   NA for Zero inflated models
+          Hur.P.dev.expl=NULL
+          Hur.NB.dev.expl=NULL
           
           
-        }, error = function(e) {
-          
-        })
+          #Store everything
+          Store.compare.terms[[i]]=list(Pois.AIC.w.r=Pois.AIC.w.r,NB.AIC.w.r=NB.AIC.w.r,LR.POIS=LR.POIS,LR.NB=LR.NB,
+                                        Pois.dev.expl=Pois.dev.expl,NB.dev.expl=NB.dev.expl,ZIP.AIC.w.r=ZIP.AIC.w.r,ZINB.AIC.w.r=ZINB.AIC.w.r,
+                                        LR.ZIP=LR.ZIP,LR.ZINB=LR.ZINB,ZIP.dev.expl=ZIP.dev.expl,ZINB.dev.expl=ZINB.dev.expl,
+                                        Tweedie.AIC.w.r=Tweedie.AIC.w.r,LR.TWEEDIE=LR.TWEEDIE,TWEEDIE.dev.expl=TWEEDIE.dev.expl,
+                                        Hur.P.AIC.w.r=Hur.P.AIC.w.r,Hur.NB.AIC.w.r=Hur.NB.AIC.w.r,LR.Hur.P=LR.Hur.P,
+                                        LR.Hur.NB=LR.Hur.NB,Hur.P.dev.expl=Hur.P.dev.expl,Hur.NB.dev.expl=Hur.NB.dev.expl)
+        }
         
       }
       
-      return(list(Cor=Cor,RMSE=RMSE,TEST=TEST,PREDS=PREDS))
+      
+      #Select error structure
+      
+      #FORMULAS
+      
+      #Poisson and NB
+      Best.count.form=list(
+        NULL,
+        as.formula(Catch.Target ~ year + BOTDEPTH + Mid.Lat +  SOI+ offset(log.Effort)),
+        as.formula(Catch.Target ~ year + BOTDEPTH + Mid.Lat +  offset(log.Effort)),
+        NULL,
+        as.formula(Catch.Target ~ year +  Mid.Lat +  offset(log.Effort)),
+        as.formula(Catch.Target ~ year +  Mid.Lat +  Moon + offset(log.Effort)),
+        as.formula(Catch.Target ~ year + Moon + Mid.Lat +  SOI+ offset(log.Effort)))
+      names(Best.count.form)=names(DATA.list)
+      
+      #Zero Inflated
+      Best.ZI.form=list(
+        NULL,
+        as.formula(Catch.Target ~ year + BOTDEPTH + Mid.Lat+ offset(log.Effort)|year + Mid.Lat+ offset(log.Effort)),
+        as.formula(Catch.Target ~ year +  Moon+ Mid.Lat+ offset(log.Effort)|year +BOTDEPTH+ Mid.Lat+ offset(log.Effort)),
+        NULL,
+        as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ Mid.Lat+ offset(log.Effort)|year + Moon+ offset(log.Effort)),
+        as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ Mid.Lat+ offset(log.Effort)|year + Mid.Lat+ offset(log.Effort)),
+        as.formula(Catch.Target ~ year + BOTDEPTH + Moon+ Mid.Lat+ offset(log.Effort)|year + Mid.Lat+ offset(log.Effort)))
+      
+      #Tweedie
+      Best.Twee.form=list(
+        NULL,
+        as.formula(Catch.Target ~ year + BOTDEPTH + Mid.Lat + SOI + offset(log.Effort)),
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        as.formula(Catch.Target ~ year + Moon + Mid.Lat + SOI + offset(log.Effort)))
+      
+      
+      #Hurdle
+      Best.HU.Pois.form=list(
+        NULL,
+        as.formula(Catch.Target ~ year + BOTDEPTH + Moon + Mid.Lat + SOI + offset(log.Effort)),
+        as.formula(Catch.Target ~ BOTDEPTH +Moon+Mid.Lat+SOI+ offset(log.Effort) | year + BOTDEPTH+Moon+Mid.Lat+SOI+ offset(log.Effort)),
+        NULL,
+        as.formula(Catch.Target ~ year + BOTDEPTH + Moon + Mid.Lat + SOI + offset(log.Effort)),
+        as.formula(Catch.Target ~ year + BOTDEPTH + Moon + Mid.Lat + offset(log.Effort)),
+        as.formula(Catch.Target ~ year + BOTDEPTH + Moon + Mid.Lat + SOI + offset(log.Effort)))
+      
+      Best.HU.NB.form=Best.HU.Pois.form
+      Best.HU.NB.form[[5]]=Catch.Target ~ year + BOTDEPTH + Moon + Mid.Lat + offset(log.Effort)
+      
+      
     }
     
-    Store.CrossVal=vector('list',N.species)
-    names(Store.CrossVal)=TARGETS.name
-    system.time(for(i in Species.cpue)
+    # K-fold cross validation
+    if(Do.K.fold.test=="YES")
     {
-      Store.CrossVal[[i]]=fn.best.error.k_fold(DATA.list[[i]],Best.count.form[[i]],Best.ZI.form[[i]],
-                                               Best.Twee.form[[i]],Best.HU.Pois.form[[i]],Best.HU.NB.form[[i]],THESE[[i]])
-    })
-    
-    
-    #extract values for average cor and RMSE
-    See.K.fold.fun.mean=function(StOrE)
-    {
-      CoR=unlist(StOrE$Cor)
-      RmSe=unlist(StOrE$RMSE)
-      Cor.names=unique(names(CoR))
-      LISTA=vector("list",length(Cor.names))
-      for(t in 1:length(LISTA))LISTA[[t]]=which(Cor.names[t]==names(CoR))
-      Data.cor=Data.rmse=matrix(NA,nrow=length(LISTA[[1]]),ncol=length(Cor.names))
-      colnames(Data.cor)=colnames(Data.rmse)=Cor.names
-      for(x in 1:ncol(Data.cor)) Data.cor[,x]=CoR[LISTA[[x]]]
-      for(x in 1:ncol(Data.cor)) Data.rmse[,x]=RmSe[LISTA[[x]]]
+      #formulas of each species and each error structure
+      THESE=Best.count.form
       
-      Mean.cor=colMeans(Data.cor)
-      Mean.rmse=colMeans(Data.rmse)
+      THESE$Sandbar=list(Pois=c("Catch.Target","year","BOTDEPTH","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
+                         NB=c("Catch.Target","year","BOTDEPTH","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
+                         ZIP=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
+                         ZINB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),                   
+                         Twee=c("Catch.Target","year","BOTDEPTH","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
+                         Hu.P=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
+                         Hu.NB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"))
       
-      return(list(Mean.cor=Mean.cor,Mean.rmse=Mean.rmse))
-    }
-    Store.k.fold.Cross.v=vector('list',N.species)
-    names(Store.k.fold.Cross.v)=names(DATA.list)
-    for(i in Species.cpue) Store.k.fold.Cross.v[[i]]=See.K.fold.fun.mean(Store.CrossVal[[i]])
-    
-    
-    #extract values for overall cor 
-    See.K.fold.fun.overall=function(StOrE)
-    {
-      Test.Dat=do.call(rbind,StOrE$TEST)
-      Preds.Pois=Preds.NB=Preds.ZIP=Preds.ZINB=Preds.Tweed=Preds.Hurdle.Pois=Preds.Hurdle.NB=NULL
-      for(q in 1:length(StOrE$PREDS))
+      
+      THESE$Tiger=list(Pois=c("Catch.Target","year","BOTDEPTH","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
+                       NB=c("Catch.Target","year","BOTDEPTH","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
+                       ZIP=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
+                       ZINB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),                   
+                       Twee=c("Catch.Target","year","BOTDEPTH","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
+                       Hu.P=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
+                       Hu.NB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"))
+      
+      THESE$Blacktip=list(Pois=c("Catch.Target","year","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
+                          NB=c("Catch.Target","year","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
+                          ZIP=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
+                          ZINB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),                   
+                          Twee=c("Catch.Target","year","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
+                          Hu.P=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
+                          Hu.NB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"))
+      
+      THESE$SpotTail=list(Pois=c("Catch.Target","year","Mid.Lat","Moon","N.hooks.Fixed","SOAK.TIME"),
+                          NB=c("Catch.Target","year","Mid.Lat","Moon","N.hooks.Fixed","SOAK.TIME"),
+                          ZIP=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
+                          ZINB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),                   
+                          Twee=c("Catch.Target","year","Mid.Lat","Moon","N.hooks.Fixed","SOAK.TIME"),
+                          Hu.P=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
+                          Hu.NB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"))
+      
+      THESE$Milk=list(Pois=c("Catch.Target","year","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
+                      NB=c("Catch.Target","year","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
+                      ZIP=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),
+                      ZINB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","N.hooks.Fixed","SOAK.TIME"),                   
+                      Twee=c("Catch.Target","year","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
+                      Hu.P=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"),
+                      Hu.NB=c("Catch.Target","year","BOTDEPTH","Moon","Mid.Lat","SOI","N.hooks.Fixed","SOAK.TIME"))
+      
+      
+      
+      K=20
+      training.data=0.95 #training subset (95% of data)
+      
+      
+      
+      fn.cor=function(OBS,PREDS)
       {
-        Preds.Pois=c(Preds.Pois,StOrE$PREDS[[q]]$Pois$PREDS)
-        Preds.NB=c(Preds.NB,StOrE$PREDS[[q]]$NB$PREDS)
-        if(!is.null(StOrE$PREDS[[q]]$ZIP$PREDS))Preds.ZIP=c(Preds.ZIP,StOrE$PREDS[[q]]$ZIP$PREDS)
-        if(!is.null(StOrE$PREDS[[q]]$ZINB$PREDS))Preds.ZINB=c(Preds.ZINB,StOrE$PREDS[[q]]$ZINB$PREDS)
-        if(!is.null(StOrE$PREDS[[q]]$Tweed$PREDS))Preds.Tweed=c(Preds.Tweed,StOrE$PREDS[[q]]$Tweed$PREDS)
-        Preds.Hurdle.Pois=c(Preds.Hurdle.Pois,StOrE$PREDS[[q]]$Hurdle.Pois$PREDS)
-        Preds.Hurdle.NB=c(Preds.Hurdle.NB,StOrE$PREDS[[q]]$Hurdle.NB$PREDS)
+        CORE=NULL
+        if(!is.null(FITS[[a]]))CORE=cor(OBS,PREDS,method='pearson')
+        return(list(CORE=CORE))
+      }
+      fn.RMSE=function(OBS,PREDS)
+      {
+        CORE=NULL
+        if(!is.null(FITS[[a]]))CORE=sqrt(mean((PREDS-OBS)^2))/Rng.obs
+        return(list(CORE=CORE))
       }
       
-      FITS=names(StOrE$PREDS[[1]])
-      Store.Corr=vector('list',length(FITS))
-      names(Store.Corr)=FITS
-      Store.Corr$Pois=cor(Test.Dat$Catch.Target[1:length(Preds.Pois)],Preds.Pois,method='pearson')
-      Store.Corr$NB=cor(Test.Dat$Catch.Target[1:length(Preds.NB)],Preds.NB,method='pearson')
-      Store.Corr$ZIP=cor(Test.Dat$Catch.Target[1:length(Preds.ZIP)],Preds.ZIP,method='pearson')
-      Store.Corr$ZINB=cor(Test.Dat$Catch.Target[1:length(Preds.ZINB)],Preds.ZINB,method='pearson')
-      if(!is.null(Preds.Tweed))Store.Corr$Tweed=cor(Test.Dat$Catch.Target[1:length(Preds.Tweed)],Preds.Tweed,method='pearson')
-      Store.Corr$Hurdle.Pois=cor(Test.Dat$Catch.Target[1:length(Preds.Hurdle.Pois)],Preds.Hurdle.Pois,method='pearson')
-      Store.Corr$Hurdle.NB=cor(Test.Dat$Catch.Target[1:length(Preds.Hurdle.NB)],Preds.Hurdle.NB,method='pearson')
+      fn.best.error.k_fold=function(DAT,FORMULA,FORMULA.ZI,FORMULA.Twee,FORMULA.Hu.P,FORMULA.Hu.NB,These)
+      {
+        
+        # 1. Put data in proper shape
+        DataFile=DAT[,match(VARIABLES,names(DAT))]
+        
+        # 2. select training subsets
+        id=round(nrow(DataFile)*training.data)
+        list.ID=list()
+        for(t in 1:K)list.ID[[t]]=sort(sample(1:nrow(DataFile),id,replace =F))
+        
+        
+        #3. loop for k-fold validation
+        Cor=RMSE=TEST=PREDS=vector('list',length=K)
+        
+        for(k in 1:K)
+        {
+          tryCatch({
+            # 3.1. select data subsets
+            All.data.train=DataFile[list.ID[[k]],]
+            All.data.test=DataFile[-list.ID[[k]],]
+            
+            
+            # 3.2. Fit different error structures to training subset
+            DAT=All.data.train
+            DAT$year=as.factor(DAT$year)
+            DAT$log.Effort=log(DAT$N.hooks.Fixed*DAT$SOAK.TIME)
+            
+            #GLM
+            #Count models
+            Pois=glm(FORMULA,data=DAT,family="poisson")
+            NB=glm.nb(FORMULA, data = DAT)
+            
+            #Zero inflated models
+            #ZIP=NULL
+            ZIP <- zeroinfl(FORMULA.ZI, data = DAT, dist = "poisson")
+            #ZINB=NULL
+            ZINB <- zeroinfl(FORMULA.ZI, data = DAT, dist = "negbin")
+            
+            Tweed=NULL
+            if(i %in%c(2,7))
+            {
+              #Tweedie
+              # 1.Find p value thru likelihood profiling
+              #note: expect  xi  about 1.5
+              P.eval=seq(1.1, 1.9, length=9)
+              out <- tweedie.profile(FORMULA.Twee,xi.vec=P.eval,data=DAT, do.plot=F)
+              P=out$xi.max
+              
+              # 2.Fit the glm
+              Tweed=glm( FORMULA.Twee,data=DAT, family=tweedie(var.power=P, link.power=0) )
+            }
+            
+            #Hurdle modles
+            Hurdle.Pois = hurdle(FORMULA.Hu.P, data = DAT , dist="poisson")
+            Hurdle.NB = hurdle(FORMULA.Hu.NB, data = DAT , dist="negbin")
+            
+            FITS=list(Pois=Pois,NB=NB,ZIP=ZIP, ZINB=ZINB,Tweed=Tweed,Hurdle.Pois=Hurdle.Pois,
+                      Hurdle.NB=Hurdle.NB)  
+            
+            # 3.3. Predict test.data  
+            Store.Preds=vector('list',length(FITS))
+            names(Store.Preds)=names(FITS)
+            for (a in 1:length(FITS))Store.Preds[[a]]=Pred.Model(FITS[[a]],All.data.test[,match(These[[a]],names(All.data.test))])
+            
+            #Store quantities
+            TEST[[k]]=All.data.test
+            PREDS[[k]]=Store.Preds
+            
+            
+            # 3.4. Measure fit
+            
+            #3.4.1 Correlation
+            Store.Corr=vector('list',length(FITS))
+            names(Store.Corr)=names(FITS)      
+            for (a in 1:length(FITS))Store.Corr[[a]]=fn.cor(All.data.test$Catch.Target,Store.Preds[[a]]$PREDS)
+            Cor[[k]]=Store.Corr
+            
+            
+            #3.4.2 Normalised RMSE
+            Store.RMSE=vector('list',length(FITS))
+            names(Store.RMSE)=names(FITS)
+            Rng.obs=range(All.data.test$Catch.Target)[2]-range(All.data.test$Catch.Target)[1]       
+            for (a in 1:length(FITS))Store.RMSE[[a]]=fn.RMSE(All.data.test$Catch.Target,Store.Preds[[a]]$PREDS)      
+            RMSE[[k]]=Store.RMSE
+            
+            
+          }, error = function(e) {
+            
+          })
+          
+        }
+        
+        return(list(Cor=Cor,RMSE=RMSE,TEST=TEST,PREDS=PREDS))
+      }
+      
+      Store.CrossVal=vector('list',N.species)
+      names(Store.CrossVal)=TARGETS.name
+      system.time(for(i in Species.cpue)
+      {
+        Store.CrossVal[[i]]=fn.best.error.k_fold(DATA.list[[i]],Best.count.form[[i]],Best.ZI.form[[i]],
+                                                 Best.Twee.form[[i]],Best.HU.Pois.form[[i]],Best.HU.NB.form[[i]],THESE[[i]])
+      })
       
       
-      return(Store.Corr=Store.Corr)
+      #extract values for average cor and RMSE
+      See.K.fold.fun.mean=function(StOrE)
+      {
+        CoR=unlist(StOrE$Cor)
+        RmSe=unlist(StOrE$RMSE)
+        Cor.names=unique(names(CoR))
+        LISTA=vector("list",length(Cor.names))
+        for(t in 1:length(LISTA))LISTA[[t]]=which(Cor.names[t]==names(CoR))
+        Data.cor=Data.rmse=matrix(NA,nrow=length(LISTA[[1]]),ncol=length(Cor.names))
+        colnames(Data.cor)=colnames(Data.rmse)=Cor.names
+        for(x in 1:ncol(Data.cor)) Data.cor[,x]=CoR[LISTA[[x]]]
+        for(x in 1:ncol(Data.cor)) Data.rmse[,x]=RmSe[LISTA[[x]]]
+        
+        Mean.cor=colMeans(Data.cor)
+        Mean.rmse=colMeans(Data.rmse)
+        
+        return(list(Mean.cor=Mean.cor,Mean.rmse=Mean.rmse))
+      }
+      Store.k.fold.Cross.v=vector('list',N.species)
+      names(Store.k.fold.Cross.v)=names(DATA.list)
+      for(i in Species.cpue) Store.k.fold.Cross.v[[i]]=See.K.fold.fun.mean(Store.CrossVal[[i]])
+      
+      
+      #extract values for overall cor 
+      See.K.fold.fun.overall=function(StOrE)
+      {
+        Test.Dat=do.call(rbind,StOrE$TEST)
+        Preds.Pois=Preds.NB=Preds.ZIP=Preds.ZINB=Preds.Tweed=Preds.Hurdle.Pois=Preds.Hurdle.NB=NULL
+        for(q in 1:length(StOrE$PREDS))
+        {
+          Preds.Pois=c(Preds.Pois,StOrE$PREDS[[q]]$Pois$PREDS)
+          Preds.NB=c(Preds.NB,StOrE$PREDS[[q]]$NB$PREDS)
+          if(!is.null(StOrE$PREDS[[q]]$ZIP$PREDS))Preds.ZIP=c(Preds.ZIP,StOrE$PREDS[[q]]$ZIP$PREDS)
+          if(!is.null(StOrE$PREDS[[q]]$ZINB$PREDS))Preds.ZINB=c(Preds.ZINB,StOrE$PREDS[[q]]$ZINB$PREDS)
+          if(!is.null(StOrE$PREDS[[q]]$Tweed$PREDS))Preds.Tweed=c(Preds.Tweed,StOrE$PREDS[[q]]$Tweed$PREDS)
+          Preds.Hurdle.Pois=c(Preds.Hurdle.Pois,StOrE$PREDS[[q]]$Hurdle.Pois$PREDS)
+          Preds.Hurdle.NB=c(Preds.Hurdle.NB,StOrE$PREDS[[q]]$Hurdle.NB$PREDS)
+        }
+        
+        FITS=names(StOrE$PREDS[[1]])
+        Store.Corr=vector('list',length(FITS))
+        names(Store.Corr)=FITS
+        Store.Corr$Pois=cor(Test.Dat$Catch.Target[1:length(Preds.Pois)],Preds.Pois,method='pearson')
+        Store.Corr$NB=cor(Test.Dat$Catch.Target[1:length(Preds.NB)],Preds.NB,method='pearson')
+        Store.Corr$ZIP=cor(Test.Dat$Catch.Target[1:length(Preds.ZIP)],Preds.ZIP,method='pearson')
+        Store.Corr$ZINB=cor(Test.Dat$Catch.Target[1:length(Preds.ZINB)],Preds.ZINB,method='pearson')
+        if(!is.null(Preds.Tweed))Store.Corr$Tweed=cor(Test.Dat$Catch.Target[1:length(Preds.Tweed)],Preds.Tweed,method='pearson')
+        Store.Corr$Hurdle.Pois=cor(Test.Dat$Catch.Target[1:length(Preds.Hurdle.Pois)],Preds.Hurdle.Pois,method='pearson')
+        Store.Corr$Hurdle.NB=cor(Test.Dat$Catch.Target[1:length(Preds.Hurdle.NB)],Preds.Hurdle.NB,method='pearson')
+        
+        
+        return(Store.Corr=Store.Corr)
+        
+      }
+      Store.k.fold.Cross.v.overall=vector('list',N.species)
+      names(Store.k.fold.Cross.v.overall)=names(DATA.list)
+      for(i in Species.cpue) Store.k.fold.Cross.v.overall[[i]]=See.K.fold.fun.overall(Store.CrossVal[[i]])
       
     }
-    Store.k.fold.Cross.v.overall=vector('list',N.species)
-    names(Store.k.fold.Cross.v.overall)=names(DATA.list)
-    for(i in Species.cpue) Store.k.fold.Cross.v.overall[[i]]=See.K.fold.fun.overall(Store.CrossVal[[i]])
+  }
+
+  
+  #1.11.3  Fit Best model and error structure 
+  if(do.GAM=="YES")
+  {
+    TermS=c("year","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)")
+    BEST.model=vector('list',N.species)
+    names(BEST.model)=names(DATA.list)
+    for(i in 1:N.species)BEST.model[[i]]=formula(paste(Res.var,paste(c(TermS,Offset),collapse="+"),sep="~"))
+    BEST.model$'Spot-tail shark'=BEST.model$'Tiger shark'=
+      formula(paste(Res.var,paste(c("year","s(Mid.Lat,k=3)",Offset),collapse="+"),sep="~"))
+    BEST.model$'Scalloped hammerhead'= BEST.model$'Sliteye shark'=
+      formula(paste(Res.var,paste(c("year","s(BOTDEPTH,k=3)",Offset),collapse="+"),sep="~"))
     
+    BEST.model$"Dusky shark"=formula(paste(Res.var,paste(c("year","s(Mid.Lat,k=3)","Moon",Offset),collapse="+"),sep="~"))
+    
+    ERROR.st=BEST.model
+    for(i in 1:N.species)ERROR.st[[i]]="NB"
   }
   
-
-  #1.12.  Fit Best model and error structure  
-  BEST.model=vector('list',N.species)
-  names(BEST.model)=names(DATA.list)
-  BEST.model$"Sandbar shark"=as.formula(Catch.Target ~ year+log.Mid.Lat+log.BOTDEPTH+offset(log.Effort))
-  
-  BEST.model$"Milk shark"=BEST.model$"Spot-tail shark"=
-  BEST.model$"Scalloped hammerhead"=BEST.model$"Tiger shark"=
-  BEST.model$"Dusky shark"=BEST.model$"Sandbar shark"
-
-  BEST.model$"Blacktip sharks"=
-  as.formula(Catch.Target ~ year + log.BOTDEPTH + offset(log.Effort) | 
-                            year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-  BEST.model$"Sliteye shark"=
-  as.formula(Catch.Target ~ year + log.Mid.Lat + offset(log.Effort) | 
-                 year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-  
-  ERROR.st=BEST.model
-  ERROR.st$"Sandbar shark"="HU.NB"
-  ERROR.st$"Milk shark"=ERROR.st$"Blacktip sharks"="ZINB"
-  ERROR.st$"Tiger shark"=ERROR.st$"Dusky shark"="NB"
-  ERROR.st$"Spot-tail shark"=ERROR.st$"Scalloped hammerhead"=ERROR.st$"Sliteye shark"="ZIP"
-
-  fit.best=function(DAT,FORMULA,ErroR)
+  if(do.GLM=="YES")
   {
-    TT=with(subset(DAT,Catch.Target>0),table(year))
-    DAT=subset(DAT,year%in%names(TT))
-    DAT$year=factor(DAT$year,levels=sort(unique(DAT$year)))
-    DAT$log.Effort=log(DAT$N.hooks.Fixed*DAT$SOAK.TIME)
-    DAT$Mid.Lat=abs(DAT$Mid.Lat)
-    DAT$log.BOTDEPTH=log(DAT$BOTDEPTH)
-    DAT$log.Mid.Lat=log(DAT$Mid.Lat)
+    BEST.model=vector('list',N.species)
+    names(BEST.model)=names(DATA.list)
+    BEST.model$"Sandbar shark"=as.formula(Catch.Target ~ year+log.Mid.Lat+log.BOTDEPTH+offset(log.Effort))
     
-    if(ErroR=="Pois") Fit=Count.Pois.fn(DAT=DAT,FORMULA=FORMULA)
-    if(ErroR=="NB") Fit=Count.NB.fn(DAT=DAT,FORMULA=FORMULA)
-    if(ErroR=="ZIP") Fit=zeroinfl(FORMULA, data = DAT, dist = "poisson")
-    if(ErroR=="ZINB") Fit=zeroinfl(FORMULA, data = DAT, dist = "negbin")
-    if(ErroR=="HU.P") Fit=hurdle(FORMULA, data = DAT , dist="poisson")
-    if(ErroR=="HU.NB") Fit=hurdle(FORMULA, data = DAT , dist="negbin")
+    BEST.model$"Milk shark"=BEST.model$"Spot-tail shark"=
+      BEST.model$"Scalloped hammerhead"=BEST.model$"Tiger shark"=
+      BEST.model$"Dusky shark"=BEST.model$"Sandbar shark"
+    
+    BEST.model$"Blacktip sharks"=
+      as.formula(Catch.Target ~ year + log.BOTDEPTH + offset(log.Effort) | 
+                   year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+    BEST.model$"Sliteye shark"=
+      as.formula(Catch.Target ~ year + log.Mid.Lat + offset(log.Effort) | 
+                   year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+    
+    ERROR.st=BEST.model
+    ERROR.st$"Sandbar shark"="HU.NB"
+    ERROR.st$"Milk shark"=ERROR.st$"Blacktip sharks"="ZINB"
+    ERROR.st$"Tiger shark"=ERROR.st$"Dusky shark"="NB"
+    ERROR.st$"Spot-tail shark"=ERROR.st$"Scalloped hammerhead"=ERROR.st$"Sliteye shark"="ZIP"
+  }
+
+
+  fit.best=function(d,FORMULA,ErroR)
+  {
+    if(do.GAM=="YES")
+    {
+      if(ErroR=="Pois") Fit=gam(FORMULA,data=d,method = "REML",family=poisson)
+      if(ErroR=="NB")  Fit=gam(FORMULA, data=d,method = "REML",family = nb)
+      if(ErroR=="ZIP") Fit=zipgam(lambda.formula=FORMULA,pi.formula=FORMULA,data=d)
+      if(ErroR=="ZINB") Fit=zinbgam(mu.formula=FORMULA,pi.formula=FORMULA, data=d)
+    }
+    
+    if(do.GLM=="YES")
+    {
+      if(ErroR=="Pois") Fit=Count.Pois.fn(DAT=d,FORMULA=FORMULA)
+      if(ErroR=="NB") Fit=Count.NB.fn(DAT=d,FORMULA=FORMULA)
+      if(ErroR=="ZIP") Fit=zeroinfl(FORMULA, data = d, dist = "poisson")
+      if(ErroR=="ZINB") Fit=zeroinfl(FORMULA, data = d, dist = "negbin")
+      if(ErroR=="HU.P") Fit=hurdle(FORMULA, data = d , dist="poisson")
+      if(ErroR=="HU.NB") Fit=hurdle(FORMULA, data = d , dist="negbin")
+    }
     
     #Null model
     Null=update(Fit,.~1)
     
-    return(list(Fit=Fit,DAT=DAT,Null=Null))
+    #Predictions
+    year.pred=summary(emmeans(Fit,"year", type="response"))
+    
+    Lat.pred=NULL
+    used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
+    if(sum(used.term)>0)
+    {
+      Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
+      Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.1))))
+    }
+    
+    Depth.pred=NULL
+    used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
+    if(sum(used.term)>0)
+    {
+      ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
+      Depth.pred=summary(emmeans(Fit,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10))))
+    }
+    return(list(Fit=Fit,DAT=d,Null=Null,year.pred=year.pred,
+                Lat.pred=Lat.pred,Depth.pred=Depth.pred))
   }
 
   Store=vector('list',N.species)   
   names(Store)=names(DATA.list)
   system.time(for(i in Species.cpue)     
   {
-    Store[[i]]=fit.best(DAT=subset(DATA.list[[i]],FixedStation=="YES",select=VARIABLES),
-                        FORMULA=BEST.model[[i]],ErroR=ERROR.st[[i]])
+    DAT=subset(DATA.list[[i]],FixedStation=="YES" & BOTDEPTH<210)
+    TT=with(subset(DAT,Catch.Target>0),table(year))
+    d=DAT %>% filter(year%in%names(TT[TT>0])) %>%
+      mutate(Mid.Lat=abs(Mid.Lat),
+             log.Ef=log(SOAK.TIME*N.hooks.Fixed),
+             year=factor(year,levels=unique(sort(year))),
+             Month=factor(Month,levels=unique(sort(Month))),
+             Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
+    
+    Store[[i]]=fit.best(d=d,FORMULA=BEST.model[[i]],ErroR=ERROR.st[[i]])
+    rm(DAT,TT,d)
   })
   
-  #Is there a non-linear relation in residuals that requires GAM?
+  #Is there a non-linear relation in residuals that requires GAM?    NOT applicable anymore....
   #note: if Pearson residuals vs the covariate shows a clear pattern 
   #       (i.e. Significant Anova), then GAM is needed (i.e. covariates
   #       must be modelled thru a polynomial as it is not linearly related
@@ -2791,31 +3042,47 @@ if(Do.abundance=="YES")
     
   }
   
-
   ##compare fitted model to null model to test if it's an improvement
    Ch.sq=ERROR.st
    for(i in Species.cpue) Ch.sq[[i]]=pchisq(2 * (logLik(Store[[i]]$Fit) - logLik(Store[[i]]$Null)), df = 3, lower.tail = FALSE)
 
-  
-  #Goodnes of fit  
-  hndl.fit="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Abundance/Paper/Model fit/"
     #rootgram
-  fn.fig(paste(hndl.fit,"rootgram_abundance",sep=""),2000,2400)
+  fn.fig(paste(getwd(),"/Model selection/rootgram_abundance",sep=""),2000,2400)
   smart.par(n.plots=length(Species.cpue),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
   for(i in Species.cpue) rootogram(Store[[i]]$Fit, main = TARGETS.name[i])
   dev.off()
   
-    #qqplots
-  fn.fig(paste(hndl.fit,"q.q_plot_abundance",sep=""),2000,2400)
-  smart.par(n.plots=length(Species.cpue),MAR=c(2,2,1,1),OMA=c(3,2,.1,.1),MGP=c(2.5,.7,0))
-  for(i in Species.cpue) qqrplot(Store[[i]]$Fit, main = TARGETS.name[i])
-  mtext("Theoretical quantiles",1,.5,outer=T)
-  mtext("Quantile residuals",2,.5,las=3,outer=T)
-  dev.off()
+  #Terms significance
   
-  #Check terms significance
+    #Anova tables
+  ANOV.TAB=vector('list',N.species)
+  for (i in 1:N.species)
+  {
+     ANVA=anova.gam(Store[[i]]$Fit)
+     Param=ANVA$pTerms.table
+     Non.param=ANVA$s.table
+     Tab=rbind(Param[,match(c("Chi.sq","p-value"),colnames(Param))],
+               Non.param[,match(c("Chi.sq","p-value"),colnames(Non.param))])
+     row.names(Tab)=NULL
+     Tab=cbind(data.frame(Term=tolower(c(row.names(Param), row.names(Non.param)))),
+               as.data.frame(Tab))
+     Tab$p=formatC(Tab$`p-value`, format = "e", digits = 2)
+     Tab$Chi.sq=round(Tab$Chi.sq,2)
+     Tab=Tab%>%select(-"p-value")
+     dummy=Tab[1,]
+     dummy[,]=""
+     SP=dummy
+     SP$Term=TARGETS.name[i]
+     Dev.Exp=dummy
+     Dev.Exp$Term="Dev.exp"
+     Dev.Exp$Chi.sq=round(ANVA$dev.expl,2)*100
+     Tab=rbind(SP,Tab,Dev.Exp)
+     ANOV.TAB[[i]]=Tab
+  }
+  write.csv(do.call(rbind,ANOV.TAB),paste(getwd(),"/Paper/Anovas/Table1_anova.cpue.csv",sep=""),row.names=F)
   
-  #Export anova table. Perform Wald test of estimated coefficients 
+  
+    #Get terms significance and coefficients 
   Sig.terms=vector('list',N.species)
   names(Sig.terms)=TARGETS.name
   Sig.term.coeff=Sig.terms
@@ -2934,40 +3201,14 @@ if(Do.abundance=="YES")
   #1.12.5. Predict year, lat and depth effect and get confidence intervals
   
     #1.12.5.1 lsmeans approach (asymptotic errors)
-  fn.emmeans.pred=function(Fit,Predictor,Predictor.range)
-  {
-    if(is.null(Predictor.range))
-    {
-      lsm=emmeans(Fit,Predictor, type="response")
-    }else
-    {
-      lsm=emmeans(Fit, Predictor, type="response", at=Predictor.range)
-    }
-    return(summary(lsm))
-  }
   PRED.CPUE=vector('list',length(Species.cpue))
   names(PRED.CPUE)=names(DATA.list)
   PRED.lat=PRED.z=PRED.CPUE
   for(i in Species.cpue)
   {
-    DAT=Store[[i]]$DAT
-    
-    #year
-    PRED.CPUE[[i]]=fn.emmeans.pred(Fit=Store[[i]]$Fit,Predictor='year',Predictor.range=NULL)
-    
-    #latitude
-    Lata=with(subset(Store[[i]]$DAT,Catch.Target>0),table(floor(Mid.Lat)))
-    Lata=as.numeric(names(Lata[Lata>3]))
-    dummy=fn.emmeans.pred(Fit=Store[[i]]$Fit,Predictor='log.Mid.Lat',
-                          Predictor.range=list(log.Mid.Lat=log(Lata)))
-    PRED.lat[[i]]=cbind(Mid.Lat=Lata,dummy)
-    
-    #depth
-    ZZ=with(subset(Store[[i]]$DAT,Catch.Target>0),table(10*floor(BOTDEPTH/10)))
-    ZZ=as.numeric(names(ZZ[ZZ>3]))
-    dummy=fn.emmeans.pred(Fit=Store[[i]]$Fit,Predictor='log.BOTDEPTH',
-                          Predictor.range=list(log.BOTDEPTH=log(ZZ)))
-    PRED.z[[i]]=cbind(BOTDEPTH=ZZ,dummy)
+    PRED.CPUE[[i]]=Store[[i]]$year.pred
+    if(!is.null(Store[[i]]$Lat.pred))PRED.lat[[i]]=Store[[i]]$Lat.pred
+    if(!is.null(Store[[i]]$Depth.pred))PRED.z[[i]]=Store[[i]]$Depth.pred
   }
 
     #1.12.5.2 Bootstrapping approach   #takes 0.2 secs per n.boot iteration   
@@ -3182,9 +3423,21 @@ if(Do.abundance=="YES")
   
   
   #1.12.6. Plot standardised cpue
-  
-  #segments
-  fun.plot.yr.pred=function(PRD,X,normalised,REV,n.seq,YLIM)
+  fn.relative=function(D)
+  {
+    Mn=mean(D$MEAN)
+    D$LOW=D$LOW/Mn
+    D$UP=D$UP/Mn
+    D$MEAN=D$MEAN/Mn
+    return(D)
+  }
+  CI.fun=function(YR,LOW1,UP1,Colr,Colr2)
+  {
+    Year.Vec <- c(YR, tail(YR, 1), rev(YR), YR[1]) 
+    Biom.Vec <- c(LOW1, tail(UP1, 1), rev(UP1), LOW1[1])
+    polygon(Year.Vec, Biom.Vec, col = Colr, border = Colr2)
+  }
+  fun.plot.yr.pred=function(PRD,X,normalised,REV,n.seq,YLIM,Type)
   {
     THIS=match(X,names(PRD))
     
@@ -3227,68 +3480,30 @@ if(Do.abundance=="YES")
     
     if(is.null(YLIM))YLIM=c(0,max(dat.plt$UppCI,na.rm=T))
     if(YLIM[2]>1e5) YLIM[2]=quantile(dat.plt$UppCI,0.5)
-    with(dat.plt,plot(yr,MeAn,pch=19,main="",xlab="",ylab="",
-                      cex=1.25,xaxt="n",cex.axis=1.25,ylim=YLIM))
-    suppressWarnings(with(dat.plt,arrows(x0=yr, y0=LowCI, x1=yr, y1=UppCI,code = 3,angle=90,length=.025)))
+    
+    if(Type=="points")
+    {
+      with(dat.plt,plot(yr,MeAn,pch=19,main="",xlab="",ylab="",
+                        cex=1.25,xaxt="n",cex.axis=1.25,ylim=YLIM))
+      suppressWarnings(with(dat.plt,arrows(x0=yr, y0=LowCI, x1=yr, y1=UppCI,code = 3,angle=90,length=.025)))
+    }
+    
+    if(Type=="polygon")
+    {
+      with(dat.plt,plot(yr,MeAn,type='l',main="",xlab="",ylab="",
+                        lwd=2,xaxt="n",cex.axis=1.25,ylim=YLIM))
+      with(dat.plt,CI.fun(yr,UppCI,LowCI,"grey80","transparent"))
+      with(dat.plt,lines(yr,MeAn,type='l',lwd=2))
+    }
     with(dat.plt,axis(1,yr,F,tck=-0.025))
     with(dat.plt,axis(1,seq(yr[1],yr[length(yr)],n.seq),F,tck=-0.05))
     with(dat.plt,axis(1,seq(yr[1],
                             yr[length(yr)],n.seq),seq(yr[1],yr[length(yr)],n.seq),tck=-0.05,cex.axis=1.25))
     
+    
     return(dat.plt)
   }
-  
-  #polygons
-  fn.relative=function(D)
-  {
-    Mn=mean(D$MEAN)
-    D$LOW=D$LOW/Mn
-    D$UP=D$UP/Mn
-    D$MEAN=D$MEAN/Mn
-    return(D)
-  }
-  CI.fun=function(YR,LOW1,UP1,Colr,Colr2)
-  {
-    Year.Vec <- c(YR, tail(YR, 1), rev(YR), YR[1]) 
-    Biom.Vec <- c(LOW1, tail(UP1, 1), rev(UP1), LOW1[1])
-    polygon(Year.Vec, Biom.Vec, col = Colr, border = Colr2)
-  }
-  fun.plot.yr.pred.polygon=function(PRD,normalised)
-  {
-    #standardise to a mean score of 1
-    if(normalised=="YES") PRD=fn.relative(PRD)
-    
-    yr=as.numeric(as.character(PRD$Year))
-    MeAn=PRD$MEAN
-    CV=PRD$CV
-    UppCI=PRD$UP
-    LowCI=PRD$LOW
-    
-    dat.plt=data.frame(yr=yr,MeAn=MeAn,CV=CV,UppCI=UppCI,LowCI=LowCI)
-    
-    #add missing years
-    mis.yr=ALL.yrs[which(!ALL.yrs%in%yr)]
-    if(length(mis.yr)>0)
-    {
-      dummy=dat.plt[1:length(mis.yr),]
-      dummy[,]=NA
-      dummy$yr=mis.yr
-      dat.plt=rbind(dat.plt,dummy)
-    }
-    dat.plt=dat.plt[order(dat.plt$yr),]
-    
-    YLIM=c(0,max(dat.plt$UppCI,na.rm=T))
-    with(dat.plt,plot(yr,MeAn,type='l',main="",xlab="",ylab="",
-                      cex=1.25,xaxt="n",cex.axis=1.25,col="grey30",ylim=YLIM))
-    with(dat.plt,CI.fun(yr,UppCI,LowCI,"grey85","transparent"))
-    with(dat.plt,lines(yr,MeAn,col="grey30"))
-    with(dat.plt,axis(1,yr,F,tck=-0.025))
-    with(dat.plt,axis(1,seq(yr[1],yr[length(yr)],5),F,tck=-0.05))
-    if(i %in%c(5,10,14)) with(dat.plt,axis(1,seq(yr[1],
-                                                 yr[length(yr)],5),seq(yr[1],yr[length(yr)],5),tck=-0.05,cex.axis=1.25))
-    return(dat.plt)
-  } 
-  
+ 
   
   #1.13.   Trends in Sex ratio           
   if(do.sex.ratio=="YES")
@@ -3413,7 +3628,7 @@ if(Do.abundance=="YES")
     
   }
   
-  
+  #ACA
   #1.14.   Trends in size
   #fit gaussian model to Fixed stations
   Size.fun=function(SPEC)
@@ -3520,590 +3735,594 @@ if(Do.abundance=="YES")
 
 
 #2. Multivariate analysis and Ecosystem indicators   MISSING:  USE Fixed Stations only!
-hndl.eco="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Ecosystems/"
-
-DATA.eco=subset(DATA,Month%in%These.Months & Taxa=="Elasmobranch" & BOTDEPTH<500 & FixedStation=="YES" )
-DATA.eco$SPECIES=as.factor(DATA.eco$SPECIES)
-
-# #for consistency, use only shots used for standardisation
-# if(exists("DATA.list"))      #DATA.list doesn't exist if abundance analysis not executed
-# {
-#   d=do.call(rbind,DATA.list)    
-#   d=subset(d,FixedStation=="YES")
-#   d=unique(d$SHEET_NO)
-#   DATA.eco=subset(DATA.eco,SHEET_NO%in%d)
-# }
-
-#some inputs
-ResVar="Number"
-MultiVar="SPECIES"
-IDVAR=c("year","BOTDEPTH.mean","Mid.Lat.mean","Effort")   #removed Long due to high correlation and Month as only 5-8 months used
-Predictors=IDVAR[-match(c("Effort"),IDVAR)]
-num.vars=c("Number","BOTDEPTH","Mid.Lat","Mid.Long","N.hooks","SOAK.TIME")
-Formula=formula("d.res.var~.")
-Formula.mvglm=formula("y~.")
-#Formula=formula("d.res.var~year*Mid.Lat.mean+BOTDEPTH.mean")
-Keep.vars=c("SHEET_NO","SPECIES","COMMON_NAME","SCIENTIFIC_NAME","Station.no.","date","Day",
-            "Month","year","TL","FL","SEX","Number","BOTDEPTH","Mid.Lat","Mid.Long","N.hooks","N.hooks.Fixed",
-            "SOAK.TIME","Moon","TEMP","Lat.round","Long.round")
-DATA.eco=DATA.eco[,match(Keep.vars,names(DATA.eco))]
-
-#remove additional stations as not sampled extensively
-DATA.eco=subset(DATA.eco,Station.no.%in%
-                  as.character(Fixed.Stations$Station.no.[which(!Fixed.Stations$Station.no.=="additional")])) 
-DATA.eco$Station.no.=as.numeric(DATA.eco$Station.no.)
-DATA.eco$Statn_yr=with(DATA.eco,paste(Station.no.,year))
-
-DATA.eco$SPECIES=as.character(DATA.eco$SPECIES)
-DATA.eco$Month=as.factor(DATA.eco$Month)
-DATA.eco$year=as.factor(DATA.eco$year)
-
-for(n in 1:length(num.vars)) DATA.eco[,match(num.vars[n],names(DATA.eco))]=as.numeric(as.character(DATA.eco[,match(num.vars[n],names(DATA.eco))]))
-DATA.eco$Effort=with(DATA.eco,N.hooks*SOAK.TIME)
-
-#Aggreate shots by station
-#note: aggregate by Station-year
-Table.stations.per.year=with(DATA.eco[!duplicated(DATA.eco$SHEET_NO),],table(year,Station.no.))  #unbalanced design    
-
+if(Do.multivariate=="YES")
+{
+  hndl.eco="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Ecosystems/"
+  
+  DATA.eco=subset(DATA,Month%in%These.Months & Taxa=="Elasmobranch" & BOTDEPTH<500 & FixedStation=="YES" )
+  DATA.eco$SPECIES=as.factor(DATA.eco$SPECIES)
+  
+  # #for consistency, use only shots used for standardisation
+  # if(exists("DATA.list"))      #DATA.list doesn't exist if abundance analysis not executed
+  # {
+  #   d=do.call(rbind,DATA.list)    
+  #   d=subset(d,FixedStation=="YES")
+  #   d=unique(d$SHEET_NO)
+  #   DATA.eco=subset(DATA.eco,SHEET_NO%in%d)
+  # }
+  
+  #some inputs
+  ResVar="Number"
+  MultiVar="SPECIES"
+  IDVAR=c("year","BOTDEPTH.mean","Mid.Lat.mean","Effort")   #removed Long due to high correlation and Month as only 5-8 months used
+  Predictors=IDVAR[-match(c("Effort"),IDVAR)]
+  num.vars=c("Number","BOTDEPTH","Mid.Lat","Mid.Long","N.hooks","SOAK.TIME")
+  Formula=formula("d.res.var~.")
+  Formula.mvglm=formula("y~.")
+  #Formula=formula("d.res.var~year*Mid.Lat.mean+BOTDEPTH.mean")
+  Keep.vars=c("SHEET_NO","SPECIES","COMMON_NAME","SCIENTIFIC_NAME","Station.no.","date","Day",
+              "Month","year","TL","FL","SEX","Number","BOTDEPTH","Mid.Lat","Mid.Long","N.hooks","N.hooks.Fixed",
+              "SOAK.TIME","Moon","TEMP","Lat.round","Long.round")
+  DATA.eco=DATA.eco[,match(Keep.vars,names(DATA.eco))]
+  
+  #remove additional stations as not sampled extensively
+  DATA.eco=subset(DATA.eco,Station.no.%in%
+                    as.character(Fixed.Stations$Station.no.[which(!Fixed.Stations$Station.no.=="additional")])) 
+  DATA.eco$Station.no.=as.numeric(DATA.eco$Station.no.)
+  DATA.eco$Statn_yr=with(DATA.eco,paste(Station.no.,year))
+  
+  DATA.eco$SPECIES=as.character(DATA.eco$SPECIES)
+  DATA.eco$Month=as.factor(DATA.eco$Month)
+  DATA.eco$year=as.factor(DATA.eco$year)
+  
+  for(n in 1:length(num.vars)) DATA.eco[,match(num.vars[n],names(DATA.eco))]=as.numeric(as.character(DATA.eco[,match(num.vars[n],names(DATA.eco))]))
+  DATA.eco$Effort=with(DATA.eco,N.hooks*SOAK.TIME)
+  
+  #Aggreate shots by station
+  #note: aggregate by Station-year
+  Table.stations.per.year=with(DATA.eco[!duplicated(DATA.eco$SHEET_NO),],table(year,Station.no.))  #unbalanced design    
+  
   #remove stations 2 and 3 as hardly visited
-DATA.eco=subset(DATA.eco,!Station.no.%in%c(2,3))
-
-#mean depth and lat by station-year
-Mean.Mid.Lat.Long.depth=aggregate(cbind(Mid.Lat,Mid.Long,BOTDEPTH)~Station.no.+year,DATA.eco,mean)   
-names(Mean.Mid.Lat.Long.depth)[match(c("Mid.Lat","Mid.Long","BOTDEPTH"),names(Mean.Mid.Lat.Long.depth))]=c("Mid.Lat.mean","Mid.Long.mean","BOTDEPTH.mean")
-DATA.eco=merge(DATA.eco,Mean.Mid.Lat.Long.depth,by=c("Station.no.","year"))
-
-#effort by station-year
-Effort.Station.year=aggregate(Effort~Station.no.+year,DATA.eco[!duplicated(DATA.eco$SHEET_NO),],sum)
-names(Effort.Station.year)[match("Effort",names(Effort.Station.year))]="Effort.statn_year"
-DATA.eco=merge(DATA.eco,Effort.Station.year,by=c("Station.no.","year"))  
-
-#round mean position and depth
-DATA.eco$Mid.Long.mean=round(DATA.eco$Mid.Long.mean,1)
-DATA.eco$Mid.Lat.mean=round(abs(DATA.eco$Mid.Lat.mean),1)
-DATA.eco$BOTDEPTH.mean=round(DATA.eco$BOTDEPTH.mean)
-
-#numbers by station-year
-Numbers.Station.year=aggregate(Number~Station.no.+year+SPECIES+COMMON_NAME+SCIENTIFIC_NAME+
-       +Mid.Lat.mean+Mid.Long.mean+BOTDEPTH.mean+Effort.statn_year,DATA.eco,sum)
-
-# #keep species occurring in >0.1%
-# Tab.sp=table(Numbers.Station.year$COMMON_NAME)
-# Tab.sp=Tab.sp/sum(Tab.sp)
-# Tab.sp=round(100*Tab.sp,2)
-# Tab.sp=Tab.sp[Tab.sp>=0.1]
-# Numbers.Station.year=subset(Numbers.Station.year,COMMON_NAME%in%names(Tab.sp))
-
-#See spatial cpue of species ( in numbers per 1000 hooks)
-Numbers.Station.year$cpue=1000*with(Numbers.Station.year,Number/Effort.statn_year)
-
-Dist.sptl=aggregate(cpue~Mid.Lat.mean+Mid.Long.mean+COMMON_NAME,Numbers.Station.year,sum)
-Unik.sp=unique(Dist.sptl$COMMON_NAME)
-smart.par(n.plots=length(Unik.sp),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
-for(sp in 1:length(Unik.sp)) with(subset(Dist.sptl,COMMON_NAME==Unik.sp[sp]),plot(Mid.Long.mean,Mid.Lat.mean,
-   main=Unik.sp[sp],pch=19,col=2,cex.main=.85,cex=cpue/max(cpue)*3,ylab="",xlab="",
-   ylim=range(Dist.sptl$Mid.Lat.mean),xlim=range(Dist.sptl$Mid.Long.mean)))
-
-#2.1 Multivariate
+  DATA.eco=subset(DATA.eco,!Station.no.%in%c(2,3))
+  
+  #mean depth and lat by station-year
+  Mean.Mid.Lat.Long.depth=aggregate(cbind(Mid.Lat,Mid.Long,BOTDEPTH)~Station.no.+year,DATA.eco,mean)   
+  names(Mean.Mid.Lat.Long.depth)[match(c("Mid.Lat","Mid.Long","BOTDEPTH"),names(Mean.Mid.Lat.Long.depth))]=c("Mid.Lat.mean","Mid.Long.mean","BOTDEPTH.mean")
+  DATA.eco=merge(DATA.eco,Mean.Mid.Lat.Long.depth,by=c("Station.no.","year"))
+  
+  #effort by station-year
+  Effort.Station.year=aggregate(Effort~Station.no.+year,DATA.eco[!duplicated(DATA.eco$SHEET_NO),],sum)
+  names(Effort.Station.year)[match("Effort",names(Effort.Station.year))]="Effort.statn_year"
+  DATA.eco=merge(DATA.eco,Effort.Station.year,by=c("Station.no.","year"))  
+  
+  #round mean position and depth
+  DATA.eco$Mid.Long.mean=round(DATA.eco$Mid.Long.mean,1)
+  DATA.eco$Mid.Lat.mean=round(abs(DATA.eco$Mid.Lat.mean),1)
+  DATA.eco$BOTDEPTH.mean=round(DATA.eco$BOTDEPTH.mean)
+  
+  #numbers by station-year
+  Numbers.Station.year=aggregate(Number~Station.no.+year+SPECIES+COMMON_NAME+SCIENTIFIC_NAME+
+                                   +Mid.Lat.mean+Mid.Long.mean+BOTDEPTH.mean+Effort.statn_year,DATA.eco,sum)
+  
+  # #keep species occurring in >0.1%
+  # Tab.sp=table(Numbers.Station.year$COMMON_NAME)
+  # Tab.sp=Tab.sp/sum(Tab.sp)
+  # Tab.sp=round(100*Tab.sp,2)
+  # Tab.sp=Tab.sp[Tab.sp>=0.1]
+  # Numbers.Station.year=subset(Numbers.Station.year,COMMON_NAME%in%names(Tab.sp))
+  
+  #See spatial cpue of species ( in numbers per 1000 hooks)
+  Numbers.Station.year$cpue=1000*with(Numbers.Station.year,Number/Effort.statn_year)
+  
+  Dist.sptl=aggregate(cpue~Mid.Lat.mean+Mid.Long.mean+COMMON_NAME,Numbers.Station.year,sum)
+  Unik.sp=unique(Dist.sptl$COMMON_NAME)
+  smart.par(n.plots=length(Unik.sp),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
+  for(sp in 1:length(Unik.sp)) with(subset(Dist.sptl,COMMON_NAME==Unik.sp[sp]),plot(Mid.Long.mean,Mid.Lat.mean,
+                                                                                    main=Unik.sp[sp],pch=19,col=2,cex.main=.85,cex=cpue/max(cpue)*3,ylab="",xlab="",
+                                                                                    ylim=range(Dist.sptl$Mid.Lat.mean),xlim=range(Dist.sptl$Mid.Long.mean)))
+  
+  #2.1 Multivariate
   #2.1. Classic
-# review: unbalanced design (some years only  Broome, some only Ningaloo)
-#         grouping by station-year, should drop stations 2 and 3?
-#         can have only factors or also covariate as predictors? how to show lat effect then?
-#         should have blocks rathen than lat? if so, then depth nested in block?
-if(Do.multivariate=="YES")   
-{
-  source("C:/Matias/Analyses/SOURCE_SCRIPTS/Multivariate_statistics.R")
-  DataSets=c("catch","cpue","proportion")   #response variables
-  IDVAR=c("year","BOTDEPTH.mean","Mid.Lat.mean","Effort.statn_year")
-  STore.multi.var.trad=Multivar.fn(DATA=Numbers.Station.year,ResVar=ResVar,MultiVar=MultiVar,
-                                   Predictors=Predictors,IDVAR=IDVAR,
-                                   Formula=formula("d.res.var~."),DataSets=DataSets)
-}               
-
+  # review: unbalanced design (some years only  Broome, some only Ningaloo)
+  #         grouping by station-year, should drop stations 2 and 3?
+  #         can have only factors or also covariate as predictors? how to show lat effect then?
+  #         should have blocks rathen than lat? if so, then depth nested in block?
+  if(Do.multivariate=="YES")   
+  {
+    source("C:/Matias/Analyses/SOURCE_SCRIPTS/Multivariate_statistics.R")
+    DataSets=c("catch","cpue","proportion")   #response variables
+    IDVAR=c("year","BOTDEPTH.mean","Mid.Lat.mean","Effort.statn_year")
+    STore.multi.var.trad=Multivar.fn(DATA=Numbers.Station.year,ResVar=ResVar,MultiVar=MultiVar,
+                                     Predictors=Predictors,IDVAR=IDVAR,
+                                     Formula=formula("d.res.var~."),DataSets=DataSets)
+  }               
+  
   #2.2 Multivariate glm
-if(Do.multivariate.glm=="YES")
-{
-  #create data matrix
-  fn.reshp=function(d,Y,TimeVar,IDVAR)
+  if(Do.multivariate.glm=="YES")
   {
-    DATA.agg=aggregate(formula(paste(Y,paste(c(TimeVar,IDVAR),collapse="+"),sep="~")),d,sum)
-    DATA.wide=reshape(DATA.agg,v.names=Y,idvar=IDVAR,timevar=TimeVar,direction="wide")
-    DATA.wide[is.na(DATA.wide)]=0
-    colnames(DATA.wide)=gsub(paste(Y,".",sep=""), "", names(DATA.wide))
-    #props=DATA.wide
-    #props[,-which(IDVAR%in%names(props))]=props[,-which(IDVAR%in%names(props))]/rowSums(props[,-which(IDVAR%in%names(props))])
-    #return(list(catch=DATA.wide,proportion=props))
-    return(list(DATA.wide))
-  }
-  Dat=fn.reshp(d=Numbers.Station.year,Y=ResVar,TimeVar=MultiVar,IDVAR=IDVAR)
-  mod.fn=function(X) factor(names(rev(sort(table(X)))[1]),levels=levels(X))
-  fun.percent.dev.exp=function(null,modl) 100*(abs(null-modl))/null
-  fn.multivar=function(d,FORMULA.mvglm,OFFSET)
-  {
-    library(mvabund)
-    d.res.var=d[,-which(IDVAR%in%names(d))]
-    d.preds=d[,c(Predictors)]
-    
-    y=mvabund(d.res.var)
-    
-    null <- manyglm(y~1, family="negative.binomial")
-    full <- manyglm(FORMULA.mvglm, family="negative.binomial", data=d.preds)
-    #plot(full)
-    
-    ANOVA=anova(full, nBoot=199, test="wald")
-    Percen.dev.exp.modl=fun.percent.dev.exp(null$deviance,full$deviance)
-    
-    fn.pred=function(what,dd)
+    #create data matrix
+    fn.reshp=function(d,Y,TimeVar,IDVAR)
     {
-      prdktr=dd[,match(what,names(dd))]
-      if(is.factor(prdktr)) prdktr=factor(unique(prdktr),levels(prdktr)) else
-        prdktr=seq(min(prdktr),max(prdktr),length.out=20)
+      DATA.agg=aggregate(formula(paste(Y,paste(c(TimeVar,IDVAR),collapse="+"),sep="~")),d,sum)
+      DATA.wide=reshape(DATA.agg,v.names=Y,idvar=IDVAR,timevar=TimeVar,direction="wide")
+      DATA.wide[is.na(DATA.wide)]=0
+      colnames(DATA.wide)=gsub(paste(Y,".",sep=""), "", names(DATA.wide))
+      #props=DATA.wide
+      #props[,-which(IDVAR%in%names(props))]=props[,-which(IDVAR%in%names(props))]/rowSums(props[,-which(IDVAR%in%names(props))])
+      #return(list(catch=DATA.wide,proportion=props))
+      return(list(DATA.wide))
+    }
+    Dat=fn.reshp(d=Numbers.Station.year,Y=ResVar,TimeVar=MultiVar,IDVAR=IDVAR)
+    mod.fn=function(X) factor(names(rev(sort(table(X)))[1]),levels=levels(X))
+    fun.percent.dev.exp=function(null,modl) 100*(abs(null-modl))/null
+    fn.multivar=function(d,FORMULA.mvglm,OFFSET)
+    {
+      library(mvabund)
+      d.res.var=d[,-which(IDVAR%in%names(d))]
+      d.preds=d[,c(Predictors)]
       
-      others=dd[,-match(what,names(dd))]
-      for(cl in 1:ncol(others))
+      y=mvabund(d.res.var)
+      
+      null <- manyglm(y~1, family="negative.binomial")
+      full <- manyglm(FORMULA.mvglm, family="negative.binomial", data=d.preds)
+      #plot(full)
+      
+      ANOVA=anova(full, nBoot=199, test="wald")
+      Percen.dev.exp.modl=fun.percent.dev.exp(null$deviance,full$deviance)
+      
+      fn.pred=function(what,dd)
       {
+        prdktr=dd[,match(what,names(dd))]
+        if(is.factor(prdktr)) prdktr=factor(unique(prdktr),levels(prdktr)) else
+          prdktr=seq(min(prdktr),max(prdktr),length.out=20)
         
+        others=dd[,-match(what,names(dd))]
+        for(cl in 1:ncol(others))
+        {
+          
+        }
+        NEW=data.frame(
+          year=factor("2009",levels(dd$year)),
+          BOTDEPTH.mean=seq(min(dd$BOTDEPTH.mean),max(dd$BOTDEPTH.mean),length.out=20),
+          Mid.Lat.mean=mean(dd$Mid.Lat.mean),
+          Effort=mean(dd$Effort))
+        
+        
+        PRED=predict(full,newdata=NEW,type='response', se.fit =T)
+        
+        Stand=apply(PRED$fit,2,max)
+        PRED.dot=t(t(PRED$fit)/Stand)
+        PRED.dot.min2SE=t(t(PRED$fit-2*PRED$se.fit)/Stand)
+        PRED.dot.plus2SE=t(t(PRED$fit+2+PRED$se.fit)/Stand)
+        plot(0,type='n',axes=FALSE,ann=FALSE,
+             ylim=c(1,ncol(PRED.dot)),xlim=c(1,length(unique(NEW$year))))
+        for(n in 1:nrow(NEW))
+        {
+          x=NEW[n,]
+          y=PRED.dot[n,]
+          #Mean
+          points(rep(x$year,length(y)),1:length(y),cex=PRED.dot[n,]*3,col="black")
+          #CI
+          points(rep(x$year,length(y)),1:length(y),cex=PRED.dot.min2SE[n,]*3,col="grey60") 
+          points(rep(x$year,length(y)),1:length(y),cex=PRED.dot.plus2SE[n,]*3,col="grey60") 
+        }
+        axis(2,at=1:ncol(PRED.dot),colnames(PRED.dot),las=1,cex.axis=.85)
+        axis(1,at=1:length(unique(NEW$year)),unique(NEW$year),las=1,cex.axis=.85)
+        box()
       }
-      NEW=data.frame(
-        year=factor("2009",levels(dd$year)),
-        BOTDEPTH.mean=seq(min(dd$BOTDEPTH.mean),max(dd$BOTDEPTH.mean),length.out=20),
-        Mid.Lat.mean=mean(dd$Mid.Lat.mean),
-        Effort=mean(dd$Effort))
+      fn.pred(what=names(d.preds)[p],dd=d.preds)
       
       
-      PRED=predict(full,newdata=NEW,type='response', se.fit =T)
       
-      Stand=apply(PRED$fit,2,max)
-      PRED.dot=t(t(PRED$fit)/Stand)
-      PRED.dot.min2SE=t(t(PRED$fit-2*PRED$se.fit)/Stand)
-      PRED.dot.plus2SE=t(t(PRED$fit+2+PRED$se.fit)/Stand)
-      plot(0,type='n',axes=FALSE,ann=FALSE,
-           ylim=c(1,ncol(PRED.dot)),xlim=c(1,length(unique(NEW$year))))
-      for(n in 1:nrow(NEW))
+      return(list(ANOVA=ANOVA,Percen.dev.exp.modl=Percen.dev.exp.modl))
+      
+    }
+    STore.multi.var=Dat
+    for(s in 1:length(STore.multi.var)) STore.multi.var[[s]]=fn.multivar(d=Dat[[s]],FORMULA.mvglm=Formula.mvglm)  
+  }
+  
+  #2.2 Ecosystems indicators
+  if(Do.ecosystems=="YES")
+  {
+    require(vegan)
+    require(BEQI2)
+    require(asbio)
+    
+    #Function for calculating Diversity indices and Ecosystem indicators
+    source("C:/Matias/Analyses/Ecosystem indices/Shark-bycatch/Git_bycatch_TDGDLF/Ecosystem_functions.R")
+    
+    #add trophic level
+    TL=read.csv("C:/Matias/Analyses/Ecosystem indices/Shark-bycatch/SPECIES+PCS+FATE.csv",stringsAsFactors=F)
+    DATA.eco=merge(DATA.eco,subset(TL,select=c(SPECIES,TROPHIC_LEVEL)),by="SPECIES",all.x=T)
+    
+    #balance desing
+    #plot shots by year     
+    yr.dummy=sort(unique(DATA.eco$year))
+    fn.fig(paste(hndl.eco,"Shots by year",sep=""),2000,2400)
+    smart.par(n.plots=length(yr.dummy),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
+    for(y in 1:length(yr.dummy))
+    {
+      a=subset(DATA.eco,year==yr.dummy[y])
+      plot(a$Mid.Long,a$Mid.Lat,pch=19,ylab="",xlab="",main=yr.dummy[y],
+           xlim=c(min(DATA.eco$Mid.Long),max(DATA.eco$Mid.Long)),ylim=c(min(DATA.eco$Mid.Lat),max(DATA.eco$Mid.Lat)))
+      abline(v=117,lwd=2.5,col="grey70")
+    }
+    mtext("Latitude (S)",side=2,line=-0.35,outer=T,cex=1.5,las=3)
+    mtext("Longitude (E)",side=1,line=1,outer=T,cex=1.5)
+    dev.off()
+    
+    DATA.eco$Leg=with(DATA.eco,ifelse(Mid.Long<=117,1,ifelse(Mid.Long>117,2,NA)))
+    Table.yr.leg=table(DATA.eco$Leg,DATA.eco$year,useNA='ifany')
+    
+    if(is.character(DATA.eco$SPECIES))DATA.eco$SPECIES=factor(DATA.eco$SPECIES)
+    
+    #calculate ecosystem indicators  on cpue      
+    gp.by="Statn_yr"
+    #gp.by="SHEET_NO"
+    
+    if(gp.by=="Statn_yr")
+    {
+      fn.reshp=function(d,Y,TimeVar,IdVAR)
       {
-        x=NEW[n,]
-        y=PRED.dot[n,]
-        #Mean
-        points(rep(x$year,length(y)),1:length(y),cex=PRED.dot[n,]*3,col="black")
-        #CI
-        points(rep(x$year,length(y)),1:length(y),cex=PRED.dot.min2SE[n,]*3,col="grey60") 
-        points(rep(x$year,length(y)),1:length(y),cex=PRED.dot.plus2SE[n,]*3,col="grey60") 
+        DATA.wide.cpue=reshape(d[,match(c("cpue",IdVAR,TimeVar),names(d))],v.names="cpue",
+                               idvar=IdVAR,timevar=TimeVar,direction="wide")
+        DATA.wide.cpue[is.na(DATA.wide.cpue)]=0
+        colnames(DATA.wide.cpue)=gsub(paste("cpue",".",sep=""), "", names(DATA.wide.cpue))
+        return(DATA.wide.cpue)
       }
-      axis(2,at=1:ncol(PRED.dot),colnames(PRED.dot),las=1,cex.axis=.85)
-      axis(1,at=1:length(unique(NEW$year)),unique(NEW$year),las=1,cex.axis=.85)
-      box()
-    }
-    fn.pred(what=names(d.preds)[p],dd=d.preds)
-    
-    
-    
-    return(list(ANOVA=ANOVA,Percen.dev.exp.modl=Percen.dev.exp.modl))
-    
-  }
-  STore.multi.var=Dat
-  for(s in 1:length(STore.multi.var)) STore.multi.var[[s]]=fn.multivar(d=Dat[[s]],FORMULA.mvglm=Formula.mvglm)  
-}
-
-#2.2 Ecosystems indicators
-if(Do.ecosystems=="YES")
-{
-  require(vegan)
-  require(BEQI2)
-  require(asbio)
-  
-  #Function for calculating Diversity indices and Ecosystem indicators
-  source("C:/Matias/Analyses/Ecosystem indices/Shark-bycatch/Git_bycatch_TDGDLF/Ecosystem_functions.R")
-  
-  #add trophic level
-  TL=read.csv("C:/Matias/Analyses/Ecosystem indices/Shark-bycatch/SPECIES+PCS+FATE.csv",stringsAsFactors=F)
-  DATA.eco=merge(DATA.eco,subset(TL,select=c(SPECIES,TROPHIC_LEVEL)),by="SPECIES",all.x=T)
-  
-  #balance desing
-  #plot shots by year     
-  yr.dummy=sort(unique(DATA.eco$year))
-  fn.fig(paste(hndl.eco,"Shots by year",sep=""),2000,2400)
-  smart.par(n.plots=length(yr.dummy),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
-  for(y in 1:length(yr.dummy))
-  {
-    a=subset(DATA.eco,year==yr.dummy[y])
-    plot(a$Mid.Long,a$Mid.Lat,pch=19,ylab="",xlab="",main=yr.dummy[y],
-         xlim=c(min(DATA.eco$Mid.Long),max(DATA.eco$Mid.Long)),ylim=c(min(DATA.eco$Mid.Lat),max(DATA.eco$Mid.Lat)))
-    abline(v=117,lwd=2.5,col="grey70")
-  }
-  mtext("Latitude (S)",side=2,line=-0.35,outer=T,cex=1.5,las=3)
-  mtext("Longitude (E)",side=1,line=1,outer=T,cex=1.5)
-  dev.off()
-  
-  DATA.eco$Leg=with(DATA.eco,ifelse(Mid.Long<=117,1,ifelse(Mid.Long>117,2,NA)))
-  Table.yr.leg=table(DATA.eco$Leg,DATA.eco$year,useNA='ifany')
-  
-  if(is.character(DATA.eco$SPECIES))DATA.eco$SPECIES=factor(DATA.eco$SPECIES)
-  
-  #calculate ecosystem indicators  on cpue      
-  gp.by="Statn_yr"
-  #gp.by="SHEET_NO"
-  
-  if(gp.by=="Statn_yr")
-  {
-    fn.reshp=function(d,Y,TimeVar,IdVAR)
-    {
-      DATA.wide.cpue=reshape(d[,match(c("cpue",IdVAR,TimeVar),names(d))],v.names="cpue",
-                             idvar=IdVAR,timevar=TimeVar,direction="wide")
-      DATA.wide.cpue[is.na(DATA.wide.cpue)]=0
-      colnames(DATA.wide.cpue)=gsub(paste("cpue",".",sep=""), "", names(DATA.wide.cpue))
-      return(DATA.wide.cpue)
-    }
-    Dat=fn.reshp(d=Numbers.Station.year,Y=ResVar,TimeVar=MultiVar,IdVAR=c("Station.no.",Predictors)) 
-    DATA.shots.diversity=Dat[,match(c("Station.no.",Predictors),names(Dat))]
-    Dat.y=Dat[,-match(c("Station.no.",Predictors),names(Dat))]
-    
-    #diversity indices
-    DATA.shots.diversity$Shannon = diversity(Dat.y, index = "shannon")
-    DATA.shots.diversity$Simpson = diversity(Dat.y, index = "simpson")
-    sp_names=colnames(Dat.y)
-    Evenness = function(H, S) {J = H / log(S)}  #where H = Shannon index for each community; S = Number of species
-    DATA.shots.diversity$Pielou = Evenness(H = DATA.shots.diversity$Shannon, S = length(sp_names))
-    DATA.shots.diversity$Pielou[DATA.shots.diversity$Pielou == 0] = NA
-    
-    #ecosystems indicators
-    MTL=aggregate(TROPHIC_LEVEL~Station.no.+year,DATA.eco,mean,na.rm=T) 
-    names(MTL)[match("TROPHIC_LEVEL",names(MTL))]="MTL"
-    MML=aggregate(FL~Station.no.+year,DATA.eco,mean,na.rm=T)
-    names(MML)[match("FL",names(MML))]="MML"
-    DATA.shots.diversity=merge(DATA.shots.diversity,MTL,by=c("Station.no.","year"),all=T)
-    DATA.shots.diversity=merge(DATA.shots.diversity,MML,by=c("Station.no.","year"),all=T)
-    
-  }
-  if(gp.by=="SHEET_NO")
-  {
-    SHOTS=unique(DATA.eco$SHEET_NO)   #by Shot
-    Store.shots=vector('list',length(SHOTS))
-    names(Store.shots)=SHOTS
-    system.time(for(i in 1:length(SHOTS))   #takes 12 seconds
-    {
-      dat=subset(DATA.eco,SHEET_NO==SHOTS[i])
-      d=table(dat$SPECIES)
+      Dat=fn.reshp(d=Numbers.Station.year,Y=ResVar,TimeVar=MultiVar,IdVAR=c("Station.no.",Predictors)) 
+      DATA.shots.diversity=Dat[,match(c("Station.no.",Predictors),names(Dat))]
+      Dat.y=Dat[,-match(c("Station.no.",Predictors),names(Dat))]
       
       #diversity indices
-      Div.InDX=Div.ind.shot(data=d)
-      Div.InDX=as.data.frame(do.call(cbind,Div.InDX))
+      DATA.shots.diversity$Shannon = diversity(Dat.y, index = "shannon")
+      DATA.shots.diversity$Simpson = diversity(Dat.y, index = "simpson")
+      sp_names=colnames(Dat.y)
+      Evenness = function(H, S) {J = H / log(S)}  #where H = Shannon index for each community; S = Number of species
+      DATA.shots.diversity$Pielou = Evenness(H = DATA.shots.diversity$Shannon, S = length(sp_names))
+      DATA.shots.diversity$Pielou[DATA.shots.diversity$Pielou == 0] = NA
       
-      dat.indx=dat[!duplicated(dat$SHEET_NO),]
-      dat.indx=cbind(dat.indx,Div.InDX)
+      #ecosystems indicators
+      MTL=aggregate(TROPHIC_LEVEL~Station.no.+year,DATA.eco,mean,na.rm=T) 
+      names(MTL)[match("TROPHIC_LEVEL",names(MTL))]="MTL"
+      MML=aggregate(FL~Station.no.+year,DATA.eco,mean,na.rm=T)
+      names(MML)[match("FL",names(MML))]="MML"
+      DATA.shots.diversity=merge(DATA.shots.diversity,MTL,by=c("Station.no.","year"),all=T)
+      DATA.shots.diversity=merge(DATA.shots.diversity,MML,by=c("Station.no.","year"),all=T)
       
-      dat.indx$EFFORT=with(dat.indx,N.hooks.Fixed*SOAK.TIME)
+    }
+    if(gp.by=="SHEET_NO")
+    {
+      SHOTS=unique(DATA.eco$SHEET_NO)   #by Shot
+      Store.shots=vector('list',length(SHOTS))
+      names(Store.shots)=SHOTS
+      system.time(for(i in 1:length(SHOTS))   #takes 12 seconds
+      {
+        dat=subset(DATA.eco,SHEET_NO==SHOTS[i])
+        d=table(dat$SPECIES)
+        
+        #diversity indices
+        Div.InDX=Div.ind.shot(data=d)
+        Div.InDX=as.data.frame(do.call(cbind,Div.InDX))
+        
+        dat.indx=dat[!duplicated(dat$SHEET_NO),]
+        dat.indx=cbind(dat.indx,Div.InDX)
+        
+        dat.indx$EFFORT=with(dat.indx,N.hooks.Fixed*SOAK.TIME)
+        
+        dat.indx=subset(dat.indx,select=c(SHEET_NO,Leg,year,Month,Mid.Lat,Mid.Long,BOTDEPTH,
+                                          SOAK.TIME,N.hooks.Fixed,EFFORT,Shannon,Margalef,Pielou,Simpson))
+        
+        #ecosystem indicators 
+        dd=d
+        dd=subset(dd,dd>0)
+        t_level=data.frame(SPECIES=character(),TROPHIC_LEVEL=numeric())
+        ddat=subset(dat,!is.na(TROPHIC_LEVEL))
+        if(nrow(ddat)>0)t_level=aggregate(TROPHIC_LEVEL ~ SPECIES, FUN=mean, data=ddat)
+        dummy=subset(dat,!is.na(FL))
+        dummy=subset(dummy,FL>0)
+        fl_max=NULL
+        if(nrow(dummy)>0)  fl_max=aggregate(FL~SPECIES,FUN=max,data=dummy,na.rm=T) 
+        Eco.InDX=Eco.ind.shot(data=dd,TROPHIC.LEVEL=t_level,MAX.BODY.LENGTH=fl_max)
+        Eco.InDX=as.data.frame(do.call(cbind,Eco.InDX))
+        dat.indx=cbind(dat.indx,Eco.InDX)
+        Store.shots[[i]]=dat.indx
+      })
+      DATA.shots.diversity=do.call(rbind,Store.shots)
       
-      dat.indx=subset(dat.indx,select=c(SHEET_NO,Leg,year,Month,Mid.Lat,Mid.Long,BOTDEPTH,
-                                        SOAK.TIME,N.hooks.Fixed,EFFORT,Shannon,Margalef,Pielou,Simpson))
-      
-      #ecosystem indicators 
-      dd=d
-      dd=subset(dd,dd>0)
-      t_level=data.frame(SPECIES=character(),TROPHIC_LEVEL=numeric())
-      ddat=subset(dat,!is.na(TROPHIC_LEVEL))
-      if(nrow(ddat)>0)t_level=aggregate(TROPHIC_LEVEL ~ SPECIES, FUN=mean, data=ddat)
-      dummy=subset(dat,!is.na(FL))
-      dummy=subset(dummy,FL>0)
-      fl_max=NULL
-      if(nrow(dummy)>0)  fl_max=aggregate(FL~SPECIES,FUN=max,data=dummy,na.rm=T) 
-      Eco.InDX=Eco.ind.shot(data=dd,TROPHIC.LEVEL=t_level,MAX.BODY.LENGTH=fl_max)
-      Eco.InDX=as.data.frame(do.call(cbind,Eco.InDX))
-      dat.indx=cbind(dat.indx,Eco.InDX)
-      Store.shots[[i]]=dat.indx
-    })
-    DATA.shots.diversity=do.call(rbind,Store.shots)
+    }
     
-  }
-  
-  #remove shots with no or single species as indices cannot be calculated
-  DATA.shots.diversity=subset(DATA.shots.diversity,!is.na(Shannon))  
-  DATA.shots.diversity=subset(DATA.shots.diversity,!is.na(Pielou))
-  DATA.shots.diversity=subset(DATA.shots.diversity,!is.na(Simpson))
-  DATA.shots.diversity=subset(DATA.shots.diversity,!is.na(MTL))
-  DATA.shots.diversity=subset(DATA.shots.diversity,!is.na(MML))
-  DATA.shots.diversity=subset(DATA.shots.diversity,Simpson>0)
-  DATA.shots.diversity=subset(DATA.shots.diversity,MML>0)
-  #DATA.shots.diversity=subset(DATA.shots.diversity,!year==2004)
-  
-  resp.vars=c("Shannon","Simpson","MTL","MML")
-  n.rv=length(resp.vars)
-  
-  #nominal indices
-  fn.nminl=function(d,RESVAR,PRED)
-  {
-    # a=aggregate(DATA.shots.diversity[,match(RESVAR,names(DATA.shots.diversity))]~year,DATA.shots.diversity,mean)
-    # a.sd=aggregate(DATA.shots.diversity[,match(RESVAR,names(DATA.shots.diversity))]~year,DATA.shots.diversity,sd)
-    # plot(a[,1],a[,2],pch=19,main=RESVAR)
-    # segments(a[,1],a[,2]-a.sd[,2],a[,1],a[,2]+a.sd[,2])
+    #remove shots with no or single species as indices cannot be calculated
+    DATA.shots.diversity=subset(DATA.shots.diversity,!is.na(Shannon))  
+    DATA.shots.diversity=subset(DATA.shots.diversity,!is.na(Pielou))
+    DATA.shots.diversity=subset(DATA.shots.diversity,!is.na(Simpson))
+    DATA.shots.diversity=subset(DATA.shots.diversity,!is.na(MTL))
+    DATA.shots.diversity=subset(DATA.shots.diversity,!is.na(MML))
+    DATA.shots.diversity=subset(DATA.shots.diversity,Simpson>0)
+    DATA.shots.diversity=subset(DATA.shots.diversity,MML>0)
+    #DATA.shots.diversity=subset(DATA.shots.diversity,!year==2004)
     
-   d$dummy=DATA.shots.diversity[,match(PRED,names(DATA.shots.diversity))]
-   if(!is.factor(d$dummy)) d$dummy=cut(d$dummy,20)
-    boxplot(d[,match(RESVAR,names(d))]~d$dummy,main=RESVAR)
-  }
+    resp.vars=c("Shannon","Simpson","MTL","MML")
+    n.rv=length(resp.vars)
+    
+    #nominal indices
+    fn.nminl=function(d,RESVAR,PRED)
+    {
+      # a=aggregate(DATA.shots.diversity[,match(RESVAR,names(DATA.shots.diversity))]~year,DATA.shots.diversity,mean)
+      # a.sd=aggregate(DATA.shots.diversity[,match(RESVAR,names(DATA.shots.diversity))]~year,DATA.shots.diversity,sd)
+      # plot(a[,1],a[,2],pch=19,main=RESVAR)
+      # segments(a[,1],a[,2]-a.sd[,2],a[,1],a[,2]+a.sd[,2])
+      
+      d$dummy=DATA.shots.diversity[,match(PRED,names(DATA.shots.diversity))]
+      if(!is.factor(d$dummy)) d$dummy=cut(d$dummy,20)
+      boxplot(d[,match(RESVAR,names(d))]~d$dummy,main=RESVAR)
+    }
     #year
-  fn.fig(paste(hndl.eco,"bxplt_year",sep=""),2000,2400)
-  smart.par(n.plots=length(resp.vars),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
-  for(n in 1:n.rv) fn.nminl(d=DATA.shots.diversity,RESVAR=resp.vars[n],PRED="year")
-  dev.off()
-  
+    fn.fig(paste(hndl.eco,"bxplt_year",sep=""),2000,2400)
+    smart.par(n.plots=length(resp.vars),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
+    for(n in 1:n.rv) fn.nminl(d=DATA.shots.diversity,RESVAR=resp.vars[n],PRED="year")
+    dev.off()
+    
     #BOTDEPTH.mean
-  fn.fig(paste(hndl.eco,"bxplt_depth",sep=""),2000,2400)
-  smart.par(n.plots=length(resp.vars),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
-  for(n in 1:n.rv) fn.nminl(d=DATA.shots.diversity,RESVAR=resp.vars[n],PRED="BOTDEPTH.mean")
-  dev.off()
-  
+    fn.fig(paste(hndl.eco,"bxplt_depth",sep=""),2000,2400)
+    smart.par(n.plots=length(resp.vars),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
+    for(n in 1:n.rv) fn.nminl(d=DATA.shots.diversity,RESVAR=resp.vars[n],PRED="BOTDEPTH.mean")
+    dev.off()
+    
     #Mid.Lat.mean
-  fn.fig(paste(hndl.eco,"bxplt_mid.lat",sep=""),2000,2400)
-  smart.par(n.plots=length(resp.vars),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
-  for(n in 1:n.rv) fn.nminl(d=DATA.shots.diversity,RESVAR=resp.vars[n],PRED="Mid.Lat.mean")
-  dev.off()
-
-  # #check if including effort as offset
-  # fn.fig(paste(hndl.eco,"Diversity vs effort",sep=""),2000,2400)
-  # par(mfcol=c(3,2),mai=c(.4,.45,.1,.1),mgp=c(2,.8,0))
-  # for(n in 1:n.rv)
-  # {
-  #   x=DATA.shots.diversity$EFFORT
-  #   y= DATA.shots.diversity[,match(resp.vars[n],names(DATA.shots.diversity))] 
-  #   plot(x,y,ylab=resp.vars[n],xlab='Effort')
-  #   MODL=lm(y~x)
-  #   legend('topright',paste("slope=",round(coef(MODL)[2],3)),bty='n')
-  # }
-  # dev.off()
-  
-  # fn.fig(paste(hndl.eco,"Diversity vs hooks",sep=""),2000,2400)
-  # par(mfcol=c(3,2),mai=c(.4,.45,.1,.1),mgp=c(2,.8,0))
-  # for(n in 1:n.rv)
-  # {
-  #   x=DATA.shots.diversity$N.hooks.Fixed
-  #   y= DATA.shots.diversity[,match(resp.vars[n],names(DATA.shots.diversity))] 
-  #   plot(x,y,ylab=resp.vars[n],xlab='Effort')
-  #   MODL=lm(y~x)
-  #   legend('topright',paste("slope=",round(coef(MODL)[2],3)),bty='n')
-  # }
-  # dev.off()
-  
-  # fn.fig(paste(hndl.eco,"Diversity vs SOAK.TIME",sep=""),2000,2400)
-  # par(mfcol=c(3,2),mai=c(.4,.45,.1,.1),mgp=c(2,.8,0))
-  # for(n in 1:n.rv)
-  # {
-  #   x=DATA.shots.diversity$SOAK.TIME
-  #   y= DATA.shots.diversity[,match(resp.vars[n],names(DATA.shots.diversity))] 
-  #   plot(x,y,ylab=resp.vars[n],xlab='Effort')
-  #   MODL=lm(y~x)
-  #   legend('topright',paste("slope=",round(coef(MODL)[2],3)),bty='n')
-  # }
-  # dev.off()
-  
-  # fn.fig(paste(hndl.eco,"Effort vars vs time",sep=""),2000,2400)
-  # par(mfcol=c(3,1),mai=c(.4,.45,.1,.1),mgp=c(2,.8,0))
-  # y=DATA.shots.diversity$N.hooks.Fixed
-  # x= DATA.shots.diversity$year 
-  # boxplot(y~x,ylab="N.hooks.Fixed",xlab='year')
-  # 
-  # y=DATA.shots.diversity$SOAK.TIME
-  # x= DATA.shots.diversity$year 
-  # boxplot(y~x,ylab="SOAK.TIME",xlab='year')
-  # 
-  # y=DATA.shots.diversity$EFFORT
-  # x= DATA.shots.diversity$year 
-  # boxplot(y~x,ylab="EFFORT",xlab='year')
-  # 
-  # dev.off()
-  
-  
-  #no linear increase in indices with effort, hence no effort offset. Also, gear snaps (the reason for which
-  #   some shots have less hooks) shows no systematic change thru time so remove effort
-  OFFSETT=NA
-  #OFFSETT="offset(log.EFFORT)"
-  
-  
-  #fit glm to ecosystem indicators     
-  Mod.fn.glm=function(d,ResVar,Expl.vars,Predictrs,FactoRs,OFFSET,log.var)
-  {
-    d=d[,match(c(ResVar,Expl.vars),names(d))]
-    #d=d[!is.na(d[,match(ResVar,names(d))]),]
-    #d=d[d[,match(ResVar,names(d))]>0,]
-    #d=subset(d,!is.na(EFFORT))
-    # if(length(d$BOTDEPTH)>0)
+    fn.fig(paste(hndl.eco,"bxplt_mid.lat",sep=""),2000,2400)
+    smart.par(n.plots=length(resp.vars),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
+    for(n in 1:n.rv) fn.nminl(d=DATA.shots.diversity,RESVAR=resp.vars[n],PRED="Mid.Lat.mean")
+    dev.off()
+    
+    # #check if including effort as offset
+    # fn.fig(paste(hndl.eco,"Diversity vs effort",sep=""),2000,2400)
+    # par(mfcol=c(3,2),mai=c(.4,.45,.1,.1),mgp=c(2,.8,0))
+    # for(n in 1:n.rv)
     # {
-    #   d=subset(d,!is.na(BOTDEPTH))
-    #   d=subset(d,BOTDEPTH>=3)
-    #   d$log.BOTDEPTH=log(d$BOTDEPTH)
+    #   x=DATA.shots.diversity$EFFORT
+    #   y= DATA.shots.diversity[,match(resp.vars[n],names(DATA.shots.diversity))] 
+    #   plot(x,y,ylab=resp.vars[n],xlab='Effort')
+    #   MODL=lm(y~x)
+    #   legend('topright',paste("slope=",round(coef(MODL)[2],3)),bty='n')
     # }
-    Y=d[,match(ResVar,names(d))]
-    #d=subset(d,EFFORT>0)
-    #d$log.EFFORT=log(d$EFFORT)
-    #d$log.Mid.Lat=log(-d$Mid.Lat)
+    # dev.off()
     
-    #set factors
-    #for(x in 1:length(FactoRs)) d[,match(FactoRs[x],names(d))]=as.factor(d[,match(FactoRs[x],names(d))])
-    Pred.form=paste(c(Predictrs),collapse="+")
-    if(!is.na(OFFSET))Pred.form=paste(c(Predictrs,OFFSET),collapse="+")
-    if(log.var=="YES")Formula=as.formula(paste("log(",ResVar,")", "~", Pred.form,collapse=NULL))
-    if(log.var=="NO")Formula=as.formula(paste(ResVar, "~", Pred.form,collapse=NULL))
+    # fn.fig(paste(hndl.eco,"Diversity vs hooks",sep=""),2000,2400)
+    # par(mfcol=c(3,2),mai=c(.4,.45,.1,.1),mgp=c(2,.8,0))
+    # for(n in 1:n.rv)
+    # {
+    #   x=DATA.shots.diversity$N.hooks.Fixed
+    #   y= DATA.shots.diversity[,match(resp.vars[n],names(DATA.shots.diversity))] 
+    #   plot(x,y,ylab=resp.vars[n],xlab='Effort')
+    #   MODL=lm(y~x)
+    #   legend('topright',paste("slope=",round(coef(MODL)[2],3)),bty='n')
+    # }
+    # dev.off()
+    
+    # fn.fig(paste(hndl.eco,"Diversity vs SOAK.TIME",sep=""),2000,2400)
+    # par(mfcol=c(3,2),mai=c(.4,.45,.1,.1),mgp=c(2,.8,0))
+    # for(n in 1:n.rv)
+    # {
+    #   x=DATA.shots.diversity$SOAK.TIME
+    #   y= DATA.shots.diversity[,match(resp.vars[n],names(DATA.shots.diversity))] 
+    #   plot(x,y,ylab=resp.vars[n],xlab='Effort')
+    #   MODL=lm(y~x)
+    #   legend('topright',paste("slope=",round(coef(MODL)[2],3)),bty='n')
+    # }
+    # dev.off()
+    
+    # fn.fig(paste(hndl.eco,"Effort vars vs time",sep=""),2000,2400)
+    # par(mfcol=c(3,1),mai=c(.4,.45,.1,.1),mgp=c(2,.8,0))
+    # y=DATA.shots.diversity$N.hooks.Fixed
+    # x= DATA.shots.diversity$year 
+    # boxplot(y~x,ylab="N.hooks.Fixed",xlab='year')
+    # 
+    # y=DATA.shots.diversity$SOAK.TIME
+    # x= DATA.shots.diversity$year 
+    # boxplot(y~x,ylab="SOAK.TIME",xlab='year')
+    # 
+    # y=DATA.shots.diversity$EFFORT
+    # x= DATA.shots.diversity$year 
+    # boxplot(y~x,ylab="EFFORT",xlab='year')
+    # 
+    # dev.off()
     
     
-    #Fit model 
-    model <- glm(Formula, data=d)
+    #no linear increase in indices with effort, hence no effort offset. Also, gear snaps (the reason for which
+    #   some shots have less hooks) shows no systematic change thru time so remove effort
+    OFFSETT=NA
+    #OFFSETT="offset(log.EFFORT)"
     
-    return(list(model=model, data=d))
-  }
-  
-  
-  #Predictors=c("year","Mid.Lat","BOTDEPTH")
-  #Predictors=c("year","log.Mid.Lat","log.BOTDEPTH","log.SOAK.TIME","log.N.hooks.Fixed")
-  Expl.varS=Predictors
-  FactoRS="year"
-  #Expl.varS=c("year","Mid.Lat","BOTDEPTH","EFFORT","SOAK.TIME","N.hooks.Fixed")
-  #FactoRS=Expl.varS[-match(c("Mid.Lat","BOTDEPTH","EFFORT","SOAK.TIME","N.hooks.Fixed"),Expl.varS)]
-  
-  
-  Res.var.in.log=rep("NO",length(resp.vars))    #fit response var in log space or not?
-  
-  Store.mod.out.observer=vector('list',length(resp.vars))
-  names(Store.mod.out.observer)=resp.vars
-  
-  
-  #Prelim analysis
-  # fn.bxplt=function(D,var,FactR)
-  # {
-  #   
-  #   for(mn in 1:n.rv)
-  #   {
-  #     idres=match(resp.vars[mn],names(D))
-  #     idterm=match(var,names(D))
-  #     X=D[,idterm]
-  #     if(!FactR=="YES") X=cut(X,10)
-  #     boxplot(D[,idres]~X,ylab=resp.vars[mn],col="grey75",cex.lab=1.5,cex.axis=1.25)
-  #   }
-  # }
-  # par(mfcol=c(3,2),mai=c(.4,.45,.1,.1),mgp=c(2,.8,0))
-  # fn.bxplt(D=DATA.shots.diversity,var="year",FactR="YES")
-  # fn.bxplt(D=DATA.shots.diversity,var="Mid.Lat.mean",FactR="NO")
-  # fn.bxplt(D=DATA.shots.diversity,var="BOTDEPTH.mean",FactR="NO")
-  #fn.bxplt(D=DATA.shots.diversity,var="SOAK.TIME",FactR="NO")
-  #fn.bxplt(D=DATA.shots.diversity,var="N.hooks.Fixed",FactR="NO")
-  
-  
-  #respon var dist
-  fn.fig(paste(hndl.eco,"dist_error_str",sep=""),2000,2400)
-  smart.par(n.plots=4*length(resp.vars),MAR=c(3.5,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2,.7,0))
-  for(mn in 1:n.rv)
-  {
-    id=match(resp.vars[mn],names(DATA.shots.diversity))
-    hist(DATA.shots.diversity[,id],main="",ylab="",xlab=resp.vars[mn])
-    if(mn==1) mtext("normal scale",3)
-    hist(log(DATA.shots.diversity[,id]),main='',ylab="",xlab=resp.vars[mn])
-    if(mn==1) mtext("log",3)
-    hist((DATA.shots.diversity[,id])^0.25,main='',ylab="",xlab=resp.vars[mn])
-    if(mn==1) mtext("2root",3)
-    hist(scale(DATA.shots.diversity[,id]),main='',ylab="",xlab=resp.vars[mn])
-    if(mn==1) mtext("scaled",3)
-  }
-  dev.off()
-  
-  # #Standardise data to same number of shots per year   
-  dummy=DATA.shots.diversity
-  
-  Standard.to.same.shots="NO"
-  if(Standard.to.same.shots=="YES")
-  {
-    Min.shts=min(table(DATA.shots.diversity$Leg,DATA.shots.diversity$year))
-     Min.shts=min(table(DATA.shots.diversity$year))
-     Unic.yr=sort(unique(DATA.shots.diversity$year))
-     dummy=vector('list',length(Unic.yr))
-     for(i in 1:length(Unic.yr))
-     {
-       a=subset(DATA.shots.diversity,year==Unic.yr[i])
-       id=sample(1:nrow(a),Min.shts)
-       dummy[[i]]=a[id,]
-     }
-     dummy=do.call(rbind,dummy)
-
-     #Show no year effect
-     fn.violin=function(D)
-     {
-       D$year=factor(D$year)
-       for(mn in 1:n.rv)
-       {
-         idres=match(resp.vars[mn],names(D))
-         Lis=vector('list',length(levels(D$year)))
-         for(l in 1:length(Lis)) Lis[[l]]=subset(D,year==levels(D$year)[l])[,idres]
-         Lis=do.call(cbind,Lis)
-         violin_plot(Lis,x_axis_labels=levels(D$year),main=resp.vars[mn],col="grey70")
-       }
-     }
     
-     fn.fig(paste(hndl.eco,"paper/Violin",sep=""),2000,2400)
-     par(mfcol=c(3,2),mai=c(.4,.45,.1,.1),mgp=c(2,.8,0))
-     fn.violin(D=dummy)
-     dev.off()
-    
-     fn.fig(paste(hndl.eco,"paper/Boxplot",sep=""),2000,2400)
-     par(mfcol=c(3,2),mai=c(.4,.5,.1,.1),oma=c(1,1,.1,.1),mgp=c(2.5,.6,0),las=1)
-     fn.bxplt(D=DATA.shots.diversity,var="year",FactR="YES")
-     #fn.bxplt(D=dummy,var="year",FactR="YES")
-     mtext("Year",1,-1,outer=T,cex=1.5)
-     dev.off()
-  }
-  
-  #GLM
-  do.glm.ecos="YES"
-  if(do.glm.ecos=="YES")
-  {
-    #glm approach on data subset
-    for(i in 1:n.rv)
+    #fit glm to ecosystem indicators     
+    Mod.fn.glm=function(d,ResVar,Expl.vars,Predictrs,FactoRs,OFFSET,log.var)
     {
-      Store.mod.out.observer[[i]]=Mod.fn.glm(d=dummy,
-                                             ResVar=resp.vars[i],
-                                             Expl.vars=Expl.varS,
-                                             Predictrs=Predictors,
-                                             FactoRs=FactoRS,
-                                             OFFSET=OFFSETT,
-                                             log.var=Res.var.in.log[i])
+      d=d[,match(c(ResVar,Expl.vars),names(d))]
+      #d=d[!is.na(d[,match(ResVar,names(d))]),]
+      #d=d[d[,match(ResVar,names(d))]>0,]
+      #d=subset(d,!is.na(EFFORT))
+      # if(length(d$BOTDEPTH)>0)
+      # {
+      #   d=subset(d,!is.na(BOTDEPTH))
+      #   d=subset(d,BOTDEPTH>=3)
+      #   d$log.BOTDEPTH=log(d$BOTDEPTH)
+      # }
+      Y=d[,match(ResVar,names(d))]
+      #d=subset(d,EFFORT>0)
+      #d$log.EFFORT=log(d$EFFORT)
+      #d$log.Mid.Lat=log(-d$Mid.Lat)
+      
+      #set factors
+      #for(x in 1:length(FactoRs)) d[,match(FactoRs[x],names(d))]=as.factor(d[,match(FactoRs[x],names(d))])
+      Pred.form=paste(c(Predictrs),collapse="+")
+      if(!is.na(OFFSET))Pred.form=paste(c(Predictrs,OFFSET),collapse="+")
+      if(log.var=="YES")Formula=as.formula(paste("log(",ResVar,")", "~", Pred.form,collapse=NULL))
+      if(log.var=="NO")Formula=as.formula(paste(ResVar, "~", Pred.form,collapse=NULL))
+      
+      
+      #Fit model 
+      model <- glm(Formula, data=d)
+      
+      return(list(model=model, data=d))
     }
     
-    #glm approach on data set as is
-    # for(i in 1:n.rv)
+    
+    #Predictors=c("year","Mid.Lat","BOTDEPTH")
+    #Predictors=c("year","log.Mid.Lat","log.BOTDEPTH","log.SOAK.TIME","log.N.hooks.Fixed")
+    Expl.varS=Predictors
+    FactoRS="year"
+    #Expl.varS=c("year","Mid.Lat","BOTDEPTH","EFFORT","SOAK.TIME","N.hooks.Fixed")
+    #FactoRS=Expl.varS[-match(c("Mid.Lat","BOTDEPTH","EFFORT","SOAK.TIME","N.hooks.Fixed"),Expl.varS)]
+    
+    
+    Res.var.in.log=rep("NO",length(resp.vars))    #fit response var in log space or not?
+    
+    Store.mod.out.observer=vector('list',length(resp.vars))
+    names(Store.mod.out.observer)=resp.vars
+    
+    
+    #Prelim analysis
+    # fn.bxplt=function(D,var,FactR)
     # {
-    #   Store.mod.out.observer[[i]]=Mod.fn.glm(d=DATA.shots.diversity,
-    #      ResVar=resp.vars[i],Expl.vars=Expl.varS,Predictrs=Predictors,
-    #      FactoRs=FactoRS,OFFSET="offset(log.EFFORT)",log.var=Res.var.in.log[i])
+    #   
+    #   for(mn in 1:n.rv)
+    #   {
+    #     idres=match(resp.vars[mn],names(D))
+    #     idterm=match(var,names(D))
+    #     X=D[,idterm]
+    #     if(!FactR=="YES") X=cut(X,10)
+    #     boxplot(D[,idres]~X,ylab=resp.vars[mn],col="grey75",cex.lab=1.5,cex.axis=1.25)
+    #   }
     # }
+    # par(mfcol=c(3,2),mai=c(.4,.45,.1,.1),mgp=c(2,.8,0))
+    # fn.bxplt(D=DATA.shots.diversity,var="year",FactR="YES")
+    # fn.bxplt(D=DATA.shots.diversity,var="Mid.Lat.mean",FactR="NO")
+    # fn.bxplt(D=DATA.shots.diversity,var="BOTDEPTH.mean",FactR="NO")
+    #fn.bxplt(D=DATA.shots.diversity,var="SOAK.TIME",FactR="NO")
+    #fn.bxplt(D=DATA.shots.diversity,var="N.hooks.Fixed",FactR="NO")
     
-    #Anova tables
-    TABL=vector('list',length(resp.vars))
-    names(TABL)=resp.vars
     
-    for(i in 1:n.rv)
+    #respon var dist
+    fn.fig(paste(hndl.eco,"dist_error_str",sep=""),2000,2400)
+    smart.par(n.plots=4*length(resp.vars),MAR=c(3.5,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2,.7,0))
+    for(mn in 1:n.rv)
     {
-      Modl=Store.mod.out.observer[[i]]$model
+      id=match(resp.vars[mn],names(DATA.shots.diversity))
+      hist(DATA.shots.diversity[,id],main="",ylab="",xlab=resp.vars[mn])
+      if(mn==1) mtext("normal scale",3)
+      hist(log(DATA.shots.diversity[,id]),main='',ylab="",xlab=resp.vars[mn])
+      if(mn==1) mtext("log",3)
+      hist((DATA.shots.diversity[,id])^0.25,main='',ylab="",xlab=resp.vars[mn])
+      if(mn==1) mtext("2root",3)
+      hist(scale(DATA.shots.diversity[,id]),main='',ylab="",xlab=resp.vars[mn])
+      if(mn==1) mtext("scaled",3)
+    }
+    dev.off()
+    
+    # #Standardise data to same number of shots per year   
+    dummy=DATA.shots.diversity
+    
+    Standard.to.same.shots="NO"
+    if(Standard.to.same.shots=="YES")
+    {
+      Min.shts=min(table(DATA.shots.diversity$Leg,DATA.shots.diversity$year))
+      Min.shts=min(table(DATA.shots.diversity$year))
+      Unic.yr=sort(unique(DATA.shots.diversity$year))
+      dummy=vector('list',length(Unic.yr))
+      for(i in 1:length(Unic.yr))
+      {
+        a=subset(DATA.shots.diversity,year==Unic.yr[i])
+        id=sample(1:nrow(a),Min.shts)
+        dummy[[i]]=a[id,]
+      }
+      dummy=do.call(rbind,dummy)
       
-      #each term
-      Anova.tab=anova(Modl, test = "Chisq")
-      n=2:length(Anova.tab$Deviance)
-      Term.dev.exp=100*(Anova.tab$Deviance[n]/Modl$null.deviance)
-      names(Term.dev.exp)=rownames(Anova.tab)[n]
+      #Show no year effect
+      fn.violin=function(D)
+      {
+        D$year=factor(D$year)
+        for(mn in 1:n.rv)
+        {
+          idres=match(resp.vars[mn],names(D))
+          Lis=vector('list',length(levels(D$year)))
+          for(l in 1:length(Lis)) Lis[[l]]=subset(D,year==levels(D$year)[l])[,idres]
+          Lis=do.call(cbind,Lis)
+          violin_plot(Lis,x_axis_labels=levels(D$year),main=resp.vars[mn],col="grey70")
+        }
+      }
       
-      #nice table
-      Anov.tab=as.data.frame.matrix(Anova.tab)
-      Term.tab=data.frame(Percent.dev.exp=Term.dev.exp)
-      Anova.tab=Anova.tab[-1,match(c("Deviance","Pr(>Chi)"),names(Anova.tab))]
-      Anova.tab=cbind(Anova.tab,Term.tab)
-      Anova.tab=Anova.tab[,-match("Deviance",names(Anova.tab))]
-      Anova.tab$"Pr(>Chi)"=ifelse(Anova.tab$"Pr(>Chi)"<0.001,"<0.001",round(Anova.tab$"Pr(>Chi)",3))
-      Total=Anova.tab[1,]
-      Total$"Pr(>Chi)"=""
-      Total$Percent.dev.exp=sum(Anova.tab$Percent.dev.exp)
-      rownames(Total)="Total"
-      Anova.tab=rbind(Anova.tab,Total)
-      Anova.tab$Percent.dev.exp=round(Anova.tab$Percent.dev.exp,2)
-      TABL[[i]]=Anova.tab
+      fn.fig(paste(hndl.eco,"paper/Violin",sep=""),2000,2400)
+      par(mfcol=c(3,2),mai=c(.4,.45,.1,.1),mgp=c(2,.8,0))
+      fn.violin(D=dummy)
+      dev.off()
+      
+      fn.fig(paste(hndl.eco,"paper/Boxplot",sep=""),2000,2400)
+      par(mfcol=c(3,2),mai=c(.4,.5,.1,.1),oma=c(1,1,.1,.1),mgp=c(2.5,.6,0),las=1)
+      fn.bxplt(D=DATA.shots.diversity,var="year",FactR="YES")
+      #fn.bxplt(D=dummy,var="year",FactR="YES")
+      mtext("Year",1,-1,outer=T,cex=1.5)
+      dev.off()
     }
     
-    TABL=do.call(cbind,TABL)
-    TABL.ecosys=cbind(TERM=row.names(TABL),TABL)
+    #GLM
+    do.glm.ecos="YES"
+    if(do.glm.ecos=="YES")
+    {
+      #glm approach on data subset
+      for(i in 1:n.rv)
+      {
+        Store.mod.out.observer[[i]]=Mod.fn.glm(d=dummy,
+                                               ResVar=resp.vars[i],
+                                               Expl.vars=Expl.varS,
+                                               Predictrs=Predictors,
+                                               FactoRs=FactoRS,
+                                               OFFSET=OFFSETT,
+                                               log.var=Res.var.in.log[i])
+      }
+      
+      #glm approach on data set as is
+      # for(i in 1:n.rv)
+      # {
+      #   Store.mod.out.observer[[i]]=Mod.fn.glm(d=DATA.shots.diversity,
+      #      ResVar=resp.vars[i],Expl.vars=Expl.varS,Predictrs=Predictors,
+      #      FactoRs=FactoRS,OFFSET="offset(log.EFFORT)",log.var=Res.var.in.log[i])
+      # }
+      
+      #Anova tables
+      TABL=vector('list',length(resp.vars))
+      names(TABL)=resp.vars
+      
+      for(i in 1:n.rv)
+      {
+        Modl=Store.mod.out.observer[[i]]$model
+        
+        #each term
+        Anova.tab=anova(Modl, test = "Chisq")
+        n=2:length(Anova.tab$Deviance)
+        Term.dev.exp=100*(Anova.tab$Deviance[n]/Modl$null.deviance)
+        names(Term.dev.exp)=rownames(Anova.tab)[n]
+        
+        #nice table
+        Anov.tab=as.data.frame.matrix(Anova.tab)
+        Term.tab=data.frame(Percent.dev.exp=Term.dev.exp)
+        Anova.tab=Anova.tab[-1,match(c("Deviance","Pr(>Chi)"),names(Anova.tab))]
+        Anova.tab=cbind(Anova.tab,Term.tab)
+        Anova.tab=Anova.tab[,-match("Deviance",names(Anova.tab))]
+        Anova.tab$"Pr(>Chi)"=ifelse(Anova.tab$"Pr(>Chi)"<0.001,"<0.001",round(Anova.tab$"Pr(>Chi)",3))
+        Total=Anova.tab[1,]
+        Total$"Pr(>Chi)"=""
+        Total$Percent.dev.exp=sum(Anova.tab$Percent.dev.exp)
+        rownames(Total)="Total"
+        Anova.tab=rbind(Anova.tab,Total)
+        Anova.tab$Percent.dev.exp=round(Anova.tab$Percent.dev.exp,2)
+        TABL[[i]]=Anova.tab
+      }
+      
+      TABL=do.call(cbind,TABL)
+      TABL.ecosys=cbind(TERM=row.names(TABL),TABL)
+      
+    }
     
   }
   
@@ -4581,27 +4800,32 @@ if(Do.abundance=="YES")
   
   
   #---Abundance trends---   
- 
+  ADD.P="NO"
   #2. Effect of latitude on abundance   
       #fixed stations
   fn.fig("Paper/Figure 3",2400,2400)
-  par(mfcol=n2mfrow(N.species),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
+  par(mfcol=n2mfrow(N.species-sum(sapply(PRED.lat,is.null))),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
   for(i in 1:N.species)
   {
     dummy=PRED.lat[[i]]
-    names(dummy)[6:7]=c("lower.CL","upper.CL")
-    dummy=cbind(dummy,CV=NA)
-    dummy$yr=dummy$Mid.Lat
-    id=match("response",names(dummy))
-    if(length(id)>0) names(dummy)[id]="emmean"
-    dummy$MEAN=dummy$emmean
-    dummy$UP=dummy$upper.CL
-    dummy$LOW=dummy$lower.CL
-    a=fun.plot.yr.pred(dummy,X="Mid.Lat",normalised="YES",REV="NO",n.seq=1,YLIM=NULL)
-    mtext(Tar.names[i],3,line=.05,cex=1.1)
+    if(!is.null(dummy))
+    {
+      #names(dummy)[6:7]=c("lower.CL","upper.CL")
+      dummy=cbind(dummy,CV=NA)
+      dummy$yr=dummy$Mid.Lat
+      id=match("response",names(dummy))
+      if(length(id)>0) names(dummy)[id]="emmean"
+      dummy$MEAN=dummy$emmean
+      dummy$UP=dummy$upper.CL
+      dummy$LOW=dummy$lower.CL
+      a=fun.plot.yr.pred(dummy,X="Mid.Lat",normalised="YES",REV="NO",n.seq=1,YLIM=NULL,Type="polygon")
+      mtext(Tar.names[i],3,line=.05,cex=1.1)
+    }
     
     #add p values
-    Count.p=Zero.p=NULL
+    if(ADD.P=="YES")
+    {
+          Count.p=Zero.p=NULL
     Nms=Sig.term.coeff[[i]]$Sigi.count   
     id=which(names(Nms)=='log.Mid.Lat')
     if(length(id)>0)
@@ -4624,56 +4848,64 @@ if(Do.abundance=="YES")
     }
     LGN=c(Count.p,Zero.p)
     if(!is.null(LGN))legend("bottomleft",LGN,bty='n',cex=1.25)
+    }
   }
   mtext("Relative CPUE",2,outer=T,line=-0.5,cex=1.5,las=3)
-  mtext("Latitude (?S)",1,outer=T,line=0.5,cex=1.5)
+  mtext(expression(paste("Latitude (",degree,"S)",sep="")),1,outer=T,line=0.5,cex=1.5)
   dev.off()
   
 
   #3. Effect of depth on abundance
       #fixed stations 
   fn.fig("Paper/Figure 4",2400,2400)
-  par(mfcol=n2mfrow(N.species),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
+  par(mfcol=n2mfrow(N.species-sum(sapply(PRED.z,is.null))),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
   for(i in 1:N.species)
   {
     dummy=PRED.z[[i]]
-    names(dummy)[6:7]=c("lower.CL","upper.CL")
-    dummy=cbind(dummy,CV=NA)
-    dummy$yr=dummy$BOTDEPTH
-    id=match("response",names(dummy))
-    if(length(id)>0) names(dummy)[id]="emmean"
-    dummy$MEAN=dummy$emmean
-    dummy$UP=dummy$upper.CL
-    dummy$LOW=dummy$lower.CL
-    a=fun.plot.yr.pred(dummy,X="BOTDEPTH",normalised="YES",REV="NO",n.seq=10,YLIM=NULL)
-    mtext(Tar.names[i],3,line=.05,cex=1.1)
-    
-    #add p values
-    Count.p=Zero.p=NULL
-    Nms=Sig.term.coeff[[i]]$Sigi.count
-    id=which(names(Nms)=='log.BOTDEPTH')
-    if(length(id)>0)
+    if(!is.null(dummy))
     {
-      Count.p=Nms[id]
-      dd1=Count.p
-      if(dd1>=0.01 & dd1<0.05) Count.p=paste("Count","*",sep="")
-      if(dd1>=0.001 & dd1<0.01) Count.p=paste("Count","**",sep="")
-      if(dd1<0.001) Count.p=paste("Count","***",sep="")
+      #names(dummy)[6:7]=c("lower.CL","upper.CL")
+      dummy=cbind(dummy,CV=NA)
+      dummy$yr=dummy$BOTDEPTH
+      id=match("response",names(dummy))
+      if(length(id)>0) names(dummy)[id]="emmean"
+      dummy$MEAN=dummy$emmean
+      dummy$UP=dummy$upper.CL
+      dummy$LOW=dummy$lower.CL
+      a=fun.plot.yr.pred(dummy,X="BOTDEPTH",normalised="YES",REV="NO",n.seq=10,YLIM=NULL,Type="polygon")
+      mtext(Tar.names[i],3,line=.05,cex=1.1)
     }
-    Nms=Sig.term.coeff[[i]]$Sigi.zero
-    id.z=which(names(Nms)=='log.BOTDEPTH')
-    if(length(id.z)>0) 
+
+    if(ADD.P=="YES")
     {
-      Zero.p=Nms[id.z]
-      dd1=Zero.p
-      if(dd1>=0.01 & dd1<0.05) Zero.p=paste("Zero","*",sep="")
-      if(dd1>=0.001 & dd1<0.01) Zero.p=paste("Zero","**",sep="")
-      if(dd1<0.001) Zero.p=paste("Zero","***",sep="")
+      #add p values
+      Count.p=Zero.p=NULL
+      Nms=Sig.term.coeff[[i]]$Sigi.count
+      id=which(names(Nms)=='log.BOTDEPTH')
+      if(length(id)>0)
+      {
+        Count.p=Nms[id]
+        dd1=Count.p
+        if(dd1>=0.01 & dd1<0.05) Count.p=paste("Count","*",sep="")
+        if(dd1>=0.001 & dd1<0.01) Count.p=paste("Count","**",sep="")
+        if(dd1<0.001) Count.p=paste("Count","***",sep="")
+      }
+      Nms=Sig.term.coeff[[i]]$Sigi.zero
+      id.z=which(names(Nms)=='log.BOTDEPTH')
+      if(length(id.z)>0) 
+      {
+        Zero.p=Nms[id.z]
+        dd1=Zero.p
+        if(dd1>=0.01 & dd1<0.05) Zero.p=paste("Zero","*",sep="")
+        if(dd1>=0.001 & dd1<0.01) Zero.p=paste("Zero","**",sep="")
+        if(dd1<0.001) Zero.p=paste("Zero","***",sep="")
+      }
+      LGN=c(Count.p,Zero.p)
+      Whre="topleft"
+      if(Tar.names[i]=="Milk shark")Whre="bottomright"
+      if(!is.null(LGN))legend(Whre,LGN,bty='n',cex=1.25)
     }
-    LGN=c(Count.p,Zero.p)
-    Whre="topleft"
-    if(Tar.names[i]=="Milk shark")Whre="bottomright"
-    if(!is.null(LGN))legend(Whre,LGN,bty='n',cex=1.25)
+
   }
   mtext("Relative CPUE",2,outer=T,line=-0.5,cex=1.5,las=3)
   mtext("Depth (m)",1,outer=T,line=0.5,cex=1.5)
@@ -4682,57 +4914,15 @@ if(Do.abundance=="YES")
    
   #4. Effect of time on abundance
     #fixed stations
-  fn.nmnl=function(dat,REL)
-  {
-    dat$cpue=with(dat,Catch.Target/(N.hooks.Fixed*SOAK.TIME)) 
-    TT=with(subset(dat,cpue>0),table(year))
-    dat=subset(dat,year%in%names(TT))
-    
-    d = dat %>%
-      group_by(year) %>%
-      summarise(n = length(cpue),
-                m = length(cpue[cpue>0]),
-                mean.lognz = mean(log(cpue[cpue>0])),
-                sd.lognz = sd(log(cpue[cpue>0]))) %>%
-      as.data.frame
-    d$sd.lognz=ifelse(is.na(d$sd.lognz),0,d$sd.lognz)
-    
-    d=d%>%
-      mutate(p.nz = m/n,
-             theta = log(p.nz)+mean.lognz+sd.lognz^2/2,
-             c = (1-p.nz)^(n-1),
-             d = 1+(n-1)*p.nz,
-             vartheta = ((d-c)*(1-c*d)-m*(1-c)^2)/(m*(1-c*d)^2)+
-               sd.lognz^2/m+sd.lognz^4/(2*(m+1)),
-             mean = exp(theta),
-             lowCL = exp(theta - 1.96*sqrt(vartheta)),
-             uppCL = exp(theta + 1.96*sqrt(vartheta))) 
-    
-    if(REL=="YES")
-    {
-      Mn=mean(d$mean,na.rm=T)
-      d$mean=d$mean/Mn
-      d$low95=d$lowCL/Mn
-      d$up95=d$uppCL/Mn
-    }
-    all.yrs=seq(YEAR[1],d$year[length(d$year)])
-    msn.yr=all.yrs[which(!all.yrs%in%d$year)]  
-    msn.yr.dummy=d[1:length(msn.yr),]
-    msn.yr.dummy[,]=NA
-    msn.yr.dummy$year=msn.yr
-    d=rbind(d,msn.yr.dummy)
-    d=d[order(d$year),]
-    return(d)
-  }
   INDEX=PRED.CPUE
   Plus=0.3
   fn.fig("Paper/Figure 2",2400,2400)
   par(mfcol=n2mfrow(N.species),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
   for(i in Species.cpue)
   {
-    Nml=fn.nmnl(dat=subset(DATA.list[[i]],FixedStation=="YES"),REL="YES")
+    Nml=fn.nmnl(dat=subset(DATA.list[[i]],FixedStation=="YES" & BOTDEPTH<210),REL="YES")
     dummy=PRED.CPUE[[i]]
-    names(dummy)[5:6]=c("lower.CL","upper.CL")
+    #names(dummy)[5:6]=c("lower.CL","upper.CL")
     dummy$yr=dummy$year
     id=match("response",names(dummy))
     if(length(id)>0) names(dummy)[id]="emmean"
@@ -4743,7 +4933,7 @@ if(Do.abundance=="YES")
     
     MaX=max(c(dummy$UP/mean(dummy$MEAN),Nml$up95),na.rm=T)
     
-    INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,YLIM=c(0,MaX))
+    INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,YLIM=c(0,MaX),Type="points")
     
     #add nominal
     #with(Nml,points(year+Plus, mean, "o", pch=16, lty=2, col="grey50"))
@@ -4775,7 +4965,7 @@ if(Do.abundance=="YES")
     Nml=fn.nmnl(dat=subset(DATA.list[[i]],FixedStation=="YES"),REL="YES")
     
     dummy=PRED.CPUE[[i]]
-    names(dummy)[5:6]=c("lower.CL","upper.CL")
+    #names(dummy)[5:6]=c("lower.CL","upper.CL")
     dummy$yr=dummy$year
     id=match("response",names(dummy))
     if(length(id)>0) names(dummy)[id]="emmean"
@@ -4787,7 +4977,7 @@ if(Do.abundance=="YES")
     MaX=max(c(dummy$UP/mean(dummy$MEAN),Nml$up95),na.rm=T)
     
     INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,
-                                YLIM=c(0,MaX))
+                                YLIM=c(0,MaX),Type="points")
     #add nominal
     with(Nml,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
     suppressWarnings(with(Nml,arrows(x0=year+Plus, y0=low95,x1=year+Plus, y1=up95, 
@@ -4867,7 +5057,7 @@ if(Do.abundance=="YES")
     dummy$MEAN=dummy$emmean
     dummy$UP=dummy$upper.CL
     dummy$LOW=dummy$lower.CL
-    a=fun.plot.yr.pred(dummy,X="Mid.Lat",normalised="YES",REV="NO",n.seq=1,YLIM=NULL)
+    a=fun.plot.yr.pred(dummy,X="Mid.Lat",normalised="YES",REV="NO",n.seq=1,YLIM=NULL,Type="polygon")
     
     dd1=as.data.frame(Store.size[[i]]$Signifcance)    #add p values
     dd1=dd1[match("log.Mid.Lat",row.names(dd1)),]$'Pr(>Chi)'
@@ -4897,7 +5087,7 @@ if(Do.abundance=="YES")
     dummy$MEAN=dummy$emmean
     dummy$UP=dummy$upper.CL
     dummy$LOW=dummy$lower.CL
-    a=fun.plot.yr.pred(dummy,X="BOTDEPTH",normalised="YES",REV="NO",n.seq=10,YLIM=NULL)
+    a=fun.plot.yr.pred(dummy,X="BOTDEPTH",normalised="YES",REV="NO",n.seq=10,YLIM=NULL,Type="polygon")
     
     dd1=as.data.frame(Store.size[[i]]$Signifcance)    #add p values
     dd1=dd1[match("log.BOTDEPTH",row.names(dd1)),]$'Pr(>Chi)'
@@ -4928,7 +5118,7 @@ if(Do.abundance=="YES")
     dummy$UP=dummy$upper.CL
     dummy$LOW=dummy$lower.CL
     dummy$CV=100*dummy$SE/dummy$MEAN
-    INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL)
+    INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL,Type="points")
     mtext(names(PRED.z.size)[i],3,line=.05,cex=1.1)
   }
   mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
@@ -4956,7 +5146,7 @@ if(Do.abundance=="YES")
     dummy$UP=dummy$upper.CL
     dummy$LOW=dummy$lower.CL
     dummy$CV=100*dummy$SE/dummy$MEAN
-    INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL)
+    INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL,Type="points")
     mtext(names(PRED.z.size)[i],3,line=.05,cex=1.1)
   }
   mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
