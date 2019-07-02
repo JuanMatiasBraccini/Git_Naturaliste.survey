@@ -63,7 +63,7 @@ library(imputeTS)
 #see great vignette: https://cran.r-project.org/web/packages/pscl/vignettes/countreg.pdf
 library("countreg")
 
-#Define user
+#Define user 
 User="Matias"
 #User="Dany"
 
@@ -1005,20 +1005,20 @@ if(Do.abundance=="YES")
   #1.8   Figure 1. Map of Catch rates species combined
   pos.cpue=function(Dat,SCALER,ADD.zero)
   {
-    Dat$CPUE=Per50hooks*Dat$Catch.Target/(Dat$N.hooks.Fixed*Dat$SOAK.TIME)
+    Dat$CPUE=Perhooks*Dat$Catch.Target/(Dat$N.hooks.Fixed*Dat$SOAK.TIME)
     ZeroCatch=subset(Dat,Catch.Target==0)
     Dat=subset(Dat,CPUE>0)
-    x=round(quantile(Dat$CPUE,probs=c(.25,.5,1)),2)
+    x=ceiling(quantile(Dat$CPUE,probs=c(.5,1)))
     Dat$CPUE=fn.scale(Dat$CPUE,max(Dat$CPUE,na.rm=T),SCALER)
     
     
-    a=c(Xlim[1]*0.995,Xlim[2]*1.0025)
+    a=c(Xlim[1]*0.995,Xlim[2]*1.0001)
     b=c(Ylim[1]*1.015,Ylim[2]*0.995)
     PLATE=c(.01,.9,.075,.9)
     plotmap(a,b,PLATE,Col.land,a,b)
     
     #Add shots
-    points(Dat$Mid.Long,Dat$Mid.Lat,cex=Dat$CPUE,pch=21,bg="grey70")
+    points(Dat$Mid.Long,Dat$Mid.Lat,cex=Dat$CPUE,pch=21,bg=sht.col,col="grey60")
     if(ADD.zero=="YES")points(ZeroCatch$Mid.Long,ZeroCatch$Mid.Lat,cex=0.75,pch=4,col="grey35")
     axis(1,seq(round(Xlim[1]),round(Xlim[2]),2),F)
     axis(2,seq(round(Ylim[1]),round(Ylim[2]),2),F)
@@ -1026,10 +1026,11 @@ if(Do.abundance=="YES")
     
     if(add.depth=="YES")contour(xbat, ybat, reshaped[,2:ncol(reshaped)],ylim=Ylim,xlim=Xlim, zlim=c(-1,-300),
                                 nlevels = 3,labcex=.1,lty = c(1,2,3),col=c("gray20","gray20","gray20","transparent"),add=T)
-    legend("bottomright",paste(x),pch=21,col=1,
-           pt.cex=mapply(fn.scale,x,max(x),SCALER),bty='n',cex=1,
-           pt.bg=c("grey65"),title="CPUE (#/50 hook hours) ")
-    #legend("bottomright",rep(" ",4),title="CPUE (#/50 hook hours)  ",cex=.8, bty='n', title.adj=1) 
+ 
+    legend("bottomright",paste(x),pch=21,col="grey60",
+            pt.cex=mapply(fn.scale,x,max(x),SCALER),bty='n',cex=1,
+            pt.bg=sht.col,title="catch rate")
+    
   }
   Bathymetry=Bathymetry[order(Bathymetry$V1,Bathymetry$V2),]
   xbat=sort(unique(Bathymetry$V1))
@@ -2927,6 +2928,25 @@ if(Do.abundance=="YES")
       if(ErroR=="NB")  Fit=gam(FORMULA, data=d,method = "REML",family = nb)
       if(ErroR=="ZIP") Fit=zipgam(lambda.formula=FORMULA,pi.formula=FORMULA,data=d)
       if(ErroR=="ZINB") Fit=zinbgam(mu.formula=FORMULA,pi.formula=FORMULA, data=d)
+      
+      #Predictions
+      year.pred=summary(emmeans(Fit,"year", type="response"))
+      
+      Lat.pred=NULL
+      used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
+      if(sum(used.term)>0)
+      {
+        Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
+        Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.1))))
+      }
+      
+      Depth.pred=NULL
+      used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
+      if(sum(used.term)>0)
+      {
+        ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
+        Depth.pred=summary(emmeans(Fit,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10))))
+      }
     }
     
     if(do.GLM=="YES")
@@ -2937,29 +2957,30 @@ if(Do.abundance=="YES")
       if(ErroR=="ZINB") Fit=zeroinfl(FORMULA, data = d, dist = "negbin")
       if(ErroR=="HU.P") Fit=hurdle(FORMULA, data = d , dist="poisson")
       if(ErroR=="HU.NB") Fit=hurdle(FORMULA, data = d , dist="negbin")
+      
+      #Predictions
+      year.pred=summary(emmeans(Fit,"year", type="response"))
+      
+      Lat.pred=NULL
+      used.term=grepl("log.Mid.Lat", attr(terms(FORMULA),'term.labels'))
+      if(sum(used.term)>0)
+      {
+        Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
+        Lat.pred=summary(emmeans(Fit,"log.Mid.Lat", type="response",at=list(log.Mid.Lat=log(seq(Lata[1],Lata[2],.1)))))
+      }
+      
+      Depth.pred=NULL
+      used.term=grepl("log.BOTDEPTH", attr(terms(FORMULA),'term.labels'))
+      if(sum(used.term)>0)
+      {
+        ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
+        Depth.pred=summary(emmeans(Fit,"log.BOTDEPTH", type="response",at=list(log.BOTDEPTH=log(seq(ZZ[1],ZZ[2],10)))))
+      }
     }
     
     #Null model
     Null=update(Fit,.~1)
     
-    #Predictions
-    year.pred=summary(emmeans(Fit,"year", type="response"))
-    
-    Lat.pred=NULL
-    used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
-    if(sum(used.term)>0)
-    {
-      Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
-      Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.1))))
-    }
-    
-    Depth.pred=NULL
-    used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
-    if(sum(used.term)>0)
-    {
-      ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
-      Depth.pred=summary(emmeans(Fit,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10))))
-    }
     return(list(Fit=Fit,DAT=d,Null=Null,year.pred=year.pred,
                 Lat.pred=Lat.pred,Depth.pred=Depth.pred))
   }
@@ -3052,35 +3073,36 @@ if(Do.abundance=="YES")
   for(i in Species.cpue) rootogram(Store[[i]]$Fit, main = TARGETS.name[i])
   dev.off()
   
-  #Terms significance
-  
-    #Anova tables
-  ANOV.TAB=vector('list',N.species)
-  for (i in 1:N.species)
+     #Anova tables    
+  Anova.tab=function(mod,Fcol)  
   {
-     ANVA=anova.gam(Store[[i]]$Fit)
-     Param=ANVA$pTerms.table
-     Non.param=ANVA$s.table
-     Tab=rbind(Param[,match(c("Chi.sq","p-value"),colnames(Param))],
-               Non.param[,match(c("Chi.sq","p-value"),colnames(Non.param))])
-     row.names(Tab)=NULL
-     Tab=cbind(data.frame(Term=tolower(c(row.names(Param), row.names(Non.param)))),
-               as.data.frame(Tab))
-     Tab$p=formatC(Tab$`p-value`, format = "e", digits = 2)
-     Tab$Chi.sq=round(Tab$Chi.sq,2)
-     Tab=Tab%>%select(-"p-value")
-     dummy=Tab[1,]
-     dummy[,]=""
-     SP=dummy
-     SP$Term=TARGETS.name[i]
-     Dev.Exp=dummy
-     Dev.Exp$Term="Dev.exp"
-     Dev.Exp$Chi.sq=round(ANVA$dev.expl,2)*100
-     Tab=rbind(SP,Tab,Dev.Exp)
-     ANOV.TAB[[i]]=Tab
+    ANVA=anova.gam(mod)
+    Param=ANVA$pTerms.table
+    Non.param=ANVA$s.table
+    Tab=rbind(Param[,match(c(Fcol,"p-value"),colnames(Param))],
+              Non.param[,match(c(Fcol,"p-value"),colnames(Non.param))])
+    row.names(Tab)=NULL
+    Tab=cbind(data.frame(Term=tolower(c(row.names(Param), row.names(Non.param)))),
+              as.data.frame(Tab))
+    Tab=Tab%>%rename(p=`p-value`)%>%mutate(p=ifelse(p<0.001,"<0.001",round(p,3)))
+    id=match(Fcol,names(Tab))
+    Tab[,id]=round(Tab[,id],3)
+    dummy=Tab[1,]
+    dummy[,]=""
+    SP=dummy
+    SP$Term=TARGETS.name[i]
+    Dev.Exp=dummy
+    Dev.Exp$Term="Dev.exp"
+    Dev.Exp[,id]=paste(round(ANVA$dev.expl,2)*100,"%",sep="")
+    Tab=rbind(SP,Tab,Dev.Exp)
+    Tab$Term[which(grepl("mid.lat",Tab$Term))]="latitude"
+    Tab$Term[which(grepl("botdepth",Tab$Term))]="bottom depth"
+    Tab$Term[which(grepl("Dev.exp",Tab$Term))]="Deviance explained"
+    Tab$Join=with(Tab,paste(TARGETS.name[i],Tab$Term,sep="_"))
+
+    return(Tab)
   }
-  write.csv(do.call(rbind,ANOV.TAB),paste(getwd(),"/Paper/Anovas/Table1_anova.cpue.csv",sep=""),row.names=F)
-  
+ 
   
     #Get terms significance and coefficients 
   Sig.terms=vector('list',N.species)
@@ -3437,10 +3459,9 @@ if(Do.abundance=="YES")
     Biom.Vec <- c(LOW1, tail(UP1, 1), rev(UP1), LOW1[1])
     polygon(Year.Vec, Biom.Vec, col = Colr, border = Colr2)
   }
-  fun.plot.yr.pred=function(PRD,X,normalised,REV,n.seq,YLIM,Type)
+  fun.plot.yr.pred=function(PRD,X,normalised,REV,n.seq,YLIM,XLIM,Type)
   {
     THIS=match(X,names(PRD))
-    
     if(X=="BOTDEPTH")
     { 
       dd=subset(DATA.list[[i]],Catch.Target>0)
@@ -3448,13 +3469,11 @@ if(Do.abundance=="YES")
       X.max=max(dd[,that],na.rm=T)
       PRD=PRD[PRD[,THIS]<=X.max,]
     }
-    
     if(REV=="YES")
     {
       PRD[,THIS]=-PRD[,THIS]
       PRD=PRD[order(PRD[,THIS]),]
     }
-    
     #standardise to a mean score of 1
     if(normalised=="YES") PRD=fn.relative(PRD)
     yr=as.numeric(as.character(PRD[,THIS]))
@@ -3463,7 +3482,6 @@ if(Do.abundance=="YES")
     UppCI=PRD$UP
     LowCI=PRD$LOW
     dat.plt=data.frame(yr=yr,MeAn=MeAn,UppCI=UppCI,LowCI=LowCI,CV=PRD$CV)
-    
     #add missing years
     if(X=="year")
     {
@@ -3477,30 +3495,27 @@ if(Do.abundance=="YES")
       }
     }
     if(X=="year")dat.plt=dat.plt[order(dat.plt$yr),]
-    
     if(is.null(YLIM))YLIM=c(0,max(dat.plt$UppCI,na.rm=T))
     if(YLIM[2]>1e5) YLIM[2]=quantile(dat.plt$UppCI,0.5)
-    
+    if(is.null(XLIM)) XLIM=range(dat.plt[,1])
     if(Type=="points")
     {
       with(dat.plt,plot(yr,MeAn,pch=19,main="",xlab="",ylab="",
-                        cex=1.25,xaxt="n",cex.axis=1.25,ylim=YLIM))
+                        cex=1.25,xaxt="n",cex.axis=1.25,ylim=YLIM,xlim=XLIM))
       suppressWarnings(with(dat.plt,arrows(x0=yr, y0=LowCI, x1=yr, y1=UppCI,code = 3,angle=90,length=.025)))
     }
-    
     if(Type=="polygon")
     {
       with(dat.plt,plot(yr,MeAn,type='l',main="",xlab="",ylab="",
-                        lwd=2,xaxt="n",cex.axis=1.25,ylim=YLIM))
+                        lwd=2,xaxt="n",cex.axis=1.25,ylim=YLIM,xlim=XLIM))
       with(dat.plt,CI.fun(yr,UppCI,LowCI,"grey80","transparent"))
       with(dat.plt,lines(yr,MeAn,type='l',lwd=2))
     }
-    with(dat.plt,axis(1,yr,F,tck=-0.025))
-    with(dat.plt,axis(1,seq(yr[1],yr[length(yr)],n.seq),F,tck=-0.05))
-    with(dat.plt,axis(1,seq(yr[1],
-                            yr[length(yr)],n.seq),seq(yr[1],yr[length(yr)],n.seq),tck=-0.05,cex.axis=1.25))
-    
-    
+    axis(1,seq(XLIM[1],XLIM[2],n.seq),seq(XLIM[1],XLIM[2],n.seq),tck=-0.04,cex.axis=1.25)
+    if(n.seq<10)axis(1,seq(XLIM[1],XLIM[2],1),F,tck=-0.02,cex.axis=1.25)
+    #with(dat.plt,axis(1,yr,F,tck=-0.025))
+    #with(dat.plt,axis(1,seq(yr[1],yr[length(yr)],n.seq),F,tck=-0.05))
+    #with(dat.plt,axis(1,seq(yr[1],yr[length(yr)],n.seq),seq(yr[1],yr[length(yr)],n.seq),tck=-0.05,cex.axis=1.25))
     return(dat.plt)
   }
  
@@ -3628,13 +3643,63 @@ if(Do.abundance=="YES")
     
   }
   
-  #ACA
+  
   #1.14.   Trends in size
   #fit gaussian model to Fixed stations
-  Size.fun=function(SPEC)
+  BEST.model.size=BEST.model
+  for(i in 1:N.species.size) BEST.model.size[[i]]=formula(paste("FL",paste(c("year",
+                                  's(Mid.Lat,k=3)','s(BOTDEPTH,k=3)'),collapse="+"),sep="~"))
+  BEST.model.size$`Milk shark`=BEST.model.size$`Spot-tail shark`=BEST.model.size$`Sliteye shark`=
+      formula(paste("FL",paste(c("year",'s(Mid.Lat,k=3)'),collapse="+"),sep="~"))
+  BEST.model.size$`Scalloped hammerhead`=formula(paste("FL",paste(c("year",
+                                  's(BOTDEPTH,k=3)'),collapse="+"),sep="~"))
+  Size.fun=function(dat,FORMULA)
   {
-    dat=subset(DATA,SPECIES==SPEC & !is.na(FL) & year%in%YEAR 
-               & BOTDEPTH <MaxDepth & Month%in%These.Months 
+    if(do.GLM=="YES")
+    {
+      model<- glm(FL~year+log.BOTDEPTH+log.Mid.Lat, data=dat,family=gaussian,maxit=500)
+      #Signifcance=anova(model,test="Chisq")
+      
+      #Predictions
+      year.pred=summary(emmeans(model,"year", type="response"))
+      Lata=range(floor(dat$Mid.Lat))
+      Lat.pred=summary(emmeans(model,"log.Mid.Lat", type="response",at=list(log.Mid.Lat=log(seq(Lata[1],Lata[2],.1)))))
+      ZZ=range(10*floor(dat$BOTDEPTH/10))
+      Depth.pred=summary(emmeans(model,"log.BOTDEPTH", type="response",at=list(log.BOTDEPTH=log(seq(ZZ[1],ZZ[2],10)))))
+    }
+    if(do.GAM=="YES")
+    {
+      model<- gam(FORMULA, data=dat,method = "REML",family=gaussian)
+      #Signifcance=anova(model)
+      
+      #Predictions
+      year.pred=summary(emmeans(model,"year", type="response"))
+      Lat.pred=NULL
+      used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
+      if(sum(used.term)>0)
+      {
+        Lata=range(floor(dat$Mid.Lat))
+        Lat.pred=summary(emmeans(model,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.1))))
+      }
+      Depth.pred=NULL
+      used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
+      if(sum(used.term)>0)
+      {
+        ZZ=range(10*floor(dat$BOTDEPTH/10))
+        Depth.pred=summary(emmeans(model,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10))))
+      }
+    }
+    
+    return(list(Fit=model,DAT=dat,year.pred=year.pred,Lat.pred=Lat.pred,Depth.pred=Depth.pred))
+  }
+  TARGETS.size=TARGETS
+  N.species.size=length(TARGETS.size)
+  Store.size=vector('list',N.species.size)
+  names(Store.size)=names(TARGETS.size)
+  for (i in 1:N.species.size)
+  {
+    dat=subset(DATA,SPECIES==TARGETS.size[i] & !is.na(FL) & year%in%YEAR 
+               & BOTDEPTH <210 & Month%in%These.Months 
                & Set.time <"08:00" & FixedStation=="YES")
     dat=subset(dat,!year==2004)
     
@@ -3650,21 +3715,11 @@ if(Do.abundance=="YES")
     dat$log.BOTDEPTH=log(dat$BOTDEPTH)
     dat$log.Mid.Lat=log(dat$Mid.Lat)
     
-    model<- glm(FL~year+log.BOTDEPTH+log.Mid.Lat, data=dat,family=gaussian,maxit=500)
-    Signifcance=anova(model,test="Chisq")
-    
-    return(list(Fit=model,Signifcance=Signifcance,DAT=dat))
+    Store.size[[i]]=Size.fun(dat,FORMULA=BEST.model.size[[i]])
   }
-  TARGETS.size=TARGETS
-  N.species.size=length(TARGETS.size)
-  Store.size=vector('list',N.species.size)
-  names(Store.size)=names(TARGETS.size)
-  for (i in 1:N.species.size) Store.size[[i]]=Size.fun(TARGETS.size[i])
-  
-  
+    
   #Goodnes of fit 
   hndl.fit.size="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Size/"
-  
   fn.fig(paste(hndl.fit.size,"fit.diagnostics",sep=""),1600,2400)
   par(mfrow=c(8,4),mar=c(2,2,1.5,1),oma=c(1,1.5,.1,2),mgp=c(2,.7,0))
   for(i in 1:N.species.size)
@@ -3673,65 +3728,18 @@ if(Do.abundance=="YES")
     mtext(names(TARGETS)[i],4,las=3,line=1,cex=.6)
   }
   dev.off()
-  
-  #Export Anovas tables
-  fn.anova.table=function(MOD)
-  {
-    Modl=MOD$Fit
-    Anova.tab=MOD$Signifcance
-    n=2:length(Anova.tab$Deviance)
-    Term.dev.exp=100*(Anova.tab$Deviance[n]/Modl$null.deviance)
-    names(Term.dev.exp)=rownames(Anova.tab)[n]
-    Anov.tab=as.data.frame.matrix(Anova.tab)
-    Term.tab=data.frame(Percent.dev.exp=Term.dev.exp)
-    Anova.tab=Anova.tab[-1,match(c("Deviance","Pr(>Chi)"),names(Anova.tab))]
-    Anova.tab=cbind(Anova.tab,Term.tab)
-    Anova.tab=Anova.tab[,-match("Deviance",names(Anova.tab))]
-    Anova.tab$"Pr(>Chi)"=ifelse(Anova.tab$"Pr(>Chi)"<0.001,"<0.001",round(Anova.tab$"Pr(>Chi)",3))
-    Total=Anova.tab[1,]
-    Total$"Pr(>Chi)"=""
-    Total$Percent.dev.exp=sum(Anova.tab$Percent.dev.exp)
-    rownames(Total)="Total"
-    Anova.tab=rbind(Anova.tab,Total)
-    Anova.tab$Percent.dev.exp=round(Anova.tab$Percent.dev.exp,2)
-    return(Anova.tab)
-  }
-  TABL.size=vector('list',length(Store.size))
-  names(TABL.size)=names(Store.size)
-  for (i in 1:N.species.size) TABL.size[[i]]=fn.anova.table(Store.size[[i]])
-  TABL.size=do.call(cbind,TABL.size)
-  TABL.size=cbind(Terms=rownames(TABL.size),TABL.size)
-  write.csv(TABL.size,paste(hndl.fit.size,"Anovas/TABL.size.csv",sep=""),row.names=F)
-  
-  
+
   #Predict year, lat and depth effects
-  PRED.size=vector('list',N.species.size)
-  names(PRED.size)=names(Store.size)
+  PRED.size=vector('list',length(Species.cpue))
+  names(PRED.size)=names(DATA.list)
   PRED.lat.size=PRED.z.size=PRED.size
   for(i in Species.cpue)
   {
-    DAT=Store.size[[i]]$DAT
-  
-    #year
-    PRED.size[[i]]=fn.emmeans.pred(Fit=Store.size[[i]]$Fit,Predictor='year',Predictor.range=NULL)
-    
-    #latitude
-    Lata=with(Store.size[[i]]$DAT,table(floor(Mid.Lat)))
-    Lata=as.numeric(names(Lata[Lata>3]))
-    dummy=fn.emmeans.pred(Fit=Store.size[[i]]$Fit,Predictor='log.Mid.Lat',
-                          Predictor.range=list(log.Mid.Lat=log(Lata)))
-    PRED.lat.size[[i]]=cbind(Mid.Lat=Lata,dummy)
-    
-    #depth
-    ZZ=with(Store.size[[i]]$DAT,table(10*floor(BOTDEPTH/10)))
-    ZZ=as.numeric(names(ZZ[ZZ>3]))
-    dummy=fn.emmeans.pred(Fit=Store.size[[i]]$Fit,Predictor='log.BOTDEPTH',
-                          Predictor.range=list(log.BOTDEPTH=log(ZZ)))
-    PRED.z.size[[i]]=cbind(BOTDEPTH=ZZ,dummy)
-    
+    PRED.size[[i]]=Store.size[[i]]$year.pred
+    if(!is.null(Store.size[[i]]$Lat.pred))PRED.lat.size[[i]]=Store.size[[i]]$Lat.pred
+    if(!is.null(Store.size[[i]]$Depth.pred))PRED.z.size[[i]]=Store.size[[i]]$Depth.pred
   }
 }
-
 
 
 #2. Multivariate analysis and Ecosystem indicators   MISSING:  USE Fixed Stations only!
@@ -4605,7 +4613,7 @@ if(Do.abundance=="YES")
   {
     #North West WA
     library(rgdal)
-    source("C:/Matias/Analyses/SOURCE_SCRIPTS/Plot.Map.R")
+    source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R")
     
     JA_Northern_Shark=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/JA_Northern_Shark.shp", layer="JA_Northern_Shark") 
     WA_Northern_Shark=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/NorthCoastShark_s43.shp", layer="NorthCoastShark_s43") 
@@ -4615,7 +4623,7 @@ if(Do.abundance=="YES")
     
     
     if(add.depth=="YES") if(!exists("reshaped"))reshaped=as.matrix(reshape(Bathymetry,idvar="V1",timevar="V2",v.names="V3", direction="wide"))
-    SCALER=3
+    
     LEG=c(as.character(5),"",as.character(10),"",as.character(20))
     
     fn.scale=function(x,max,scaler) ((x/max)^0.5)*scaler
@@ -4624,7 +4632,9 @@ if(Do.abundance=="YES")
     South.WA.lat=c(-26,-12)
     Xlim=South.WA.long
     Ylim=South.WA.lat
-    Per50hooks=50  #present cpue for 50 hooks rather than 1 hook
+    Perhooks=100  #present cpue for 100 hooks rather than 1 hook
+    SCALER=3
+    sht.col=rgb(.1, .1, .1, alpha=.15)
     
     #Col.Ning=rgb(.2,.2,.2,alpha=.4)
     Col.Ning="grey80"
@@ -4633,10 +4643,10 @@ if(Do.abundance=="YES")
     Col.land="grey95"
     
     fn.fig("Paper/Figure 1",2400,2400)
-    par(mfcol=n2mfrow(N.species+1),mar=c(1,1,.5,.5),oma=c(3,3,1,.1),las=1,mgp=c(.04,.6,0))
+    par(mfcol=n2mfrow(N.species+1),mar=c(1,1,.5,.5),oma=c(3,3,1,.3),las=1,mgp=c(.04,.6,0))
     
     #Add Australia and Closures
-    plot(1,xlim=c(Xlim[1]*0.9995,Xlim[2]*.9975),ylim=Ylim,xlab="",ylab="",axes=F,main="")
+    plot(1,xlim=c(Xlim[1]*0.9995,Xlim[2]*0.99),ylim=Ylim,xlab="",ylab="",axes=F,main="")
     #plot(1,xlim=South.WA.long,ylim=South.WA.lat,xlab="",ylab="",axes=F,main="")
     
     #NSF
@@ -4661,7 +4671,7 @@ if(Do.abundance=="YES")
     text(112,-23,"since 1993",srt=65,cex=1.1)
     
     polygon(WAcoast$Longitude,WAcoast$Latitude, col=Col.land)
-    box()
+    
     #axis(side = 1, at =South.WA.long[1]:South.WA.long[2], labels = F, tck = -.015)
     #axis(side = 2, at = South.WA.lat[2]:South.WA.lat[1], labels = F, tck = -.015)
     axis(side = 1, seq(South.WA.long[1],South.WA.long[2],2), labels =F, tck = -.035)
@@ -4672,8 +4682,9 @@ if(Do.abundance=="YES")
     names(ddd)[match('Station.no.',names(ddd))]='STNum'
     with(subset(ddd,!STNum=='additional'),points(Long.1,Lat.1,pch=21,bg="black",col=1))
     axis(2,seq(round(Ylim[1]),round(Ylim[2]),2),-seq(round(Ylim[1]),round(Ylim[2]),2),cex.axis=1.25)
+    box()
     
-    #Each species
+    #Each species   
     for ( i in 1:N.species)
     {
       pos.cpue(DATA.list[[i]],SCALER,ADD.zero="NO")    
@@ -4692,8 +4703,8 @@ if(Do.abundance=="YES")
     box()
     polygon(x=c(rep(South.WA.long[2],2),rep(South.WA.long[1],2)),y=c(South.WA.lat,rev(South.WA.lat)),lwd=1.5,col=rgb(.4,.2,.2,alpha=.4))
     text(135,-25,("Australia"),col="white", cex=1.35)
-    mtext("Longitude (?E)",side=1,line=1.2,font=1,las=0,cex=1.35,outer=T)
-    mtext("Latitude (?S)",side=2,line=1,font=1,las=0,cex=1.35,outer=T)
+    mtext(expression(paste("Longitude (",degree,"E)",sep="")),side=1,line=1.5,font=1,las=0,cex=1.35,outer=T)
+    mtext(expression(paste("Latitude (",degree,"S)",sep="")),side=2,line=1,font=1,las=0,cex=1.35,outer=T)
     dev.off() 
   }
   
@@ -4798,6 +4809,21 @@ if(Do.abundance=="YES")
   axis(1,2002:YEAR[length(YEAR)],F)
   dev.off()
   
+  # Anova tables for abundance and size trends
+  ANOV.TAB=vector('list',N.species) 
+  for (i in 1:N.species)  ANOV.TAB[[i]]=Anova.tab(mod=Store[[i]]$Fit,Fcol="Chi.sq")
+  ANVA.abundance=do.call(rbind,ANOV.TAB)
+  ANVA.abundance$counter=1:nrow(ANVA.abundance)
+  
+  ANOV.TAB.FL=vector('list',N.species) 
+  for (i in 1:N.species)  ANOV.TAB.FL[[i]]=Anova.tab(mod=Store.size[[i]]$Fit,Fcol="F")
+  ANVA.size=do.call(rbind,ANOV.TAB.FL)
+  ANVA.size$counter=1:nrow(ANVA.size)
+  
+  ANoVA=full_join(ANVA.abundance,ANVA.size,by="Join",all=T)%>%
+        arrange(counter.y)
+  write.csv(ANoVA,paste(getwd(),"/Paper/Anovas/Table1_anova.csv",sep=""),row.names=F)
+  
   
   #---Abundance trends---   
   ADD.P="NO"
@@ -4818,7 +4844,7 @@ if(Do.abundance=="YES")
       dummy$MEAN=dummy$emmean
       dummy$UP=dummy$upper.CL
       dummy$LOW=dummy$lower.CL
-      a=fun.plot.yr.pred(dummy,X="Mid.Lat",normalised="YES",REV="NO",n.seq=1,YLIM=NULL,Type="polygon")
+      a=fun.plot.yr.pred(dummy,X="Mid.Lat",normalised="YES",REV="NO",n.seq=1,YLIM=NULL,XLIM=NULL,Type="polygon")
       mtext(Tar.names[i],3,line=.05,cex=1.1)
     }
     
@@ -4859,6 +4885,7 @@ if(Do.abundance=="YES")
       #fixed stations 
   fn.fig("Paper/Figure 4",2400,2400)
   par(mfcol=n2mfrow(N.species-sum(sapply(PRED.z,is.null))),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
+  limX=c(20,200)
   for(i in 1:N.species)
   {
     dummy=PRED.z[[i]]
@@ -4872,10 +4899,9 @@ if(Do.abundance=="YES")
       dummy$MEAN=dummy$emmean
       dummy$UP=dummy$upper.CL
       dummy$LOW=dummy$lower.CL
-      a=fun.plot.yr.pred(dummy,X="BOTDEPTH",normalised="YES",REV="NO",n.seq=10,YLIM=NULL,Type="polygon")
+      a=fun.plot.yr.pred(dummy,X="BOTDEPTH",normalised="YES",REV="NO",n.seq=10,YLIM=NULL,XLIM=limX,Type="polygon")
       mtext(Tar.names[i],3,line=.05,cex=1.1)
     }
-
     if(ADD.P=="YES")
     {
       #add p values
@@ -4905,7 +4931,6 @@ if(Do.abundance=="YES")
       if(Tar.names[i]=="Milk shark")Whre="bottomright"
       if(!is.null(LGN))legend(Whre,LGN,bty='n',cex=1.25)
     }
-
   }
   mtext("Relative CPUE",2,outer=T,line=-0.5,cex=1.5,las=3)
   mtext("Depth (m)",1,outer=T,line=0.5,cex=1.5)
@@ -4918,6 +4943,7 @@ if(Do.abundance=="YES")
   Plus=0.3
   fn.fig("Paper/Figure 2",2400,2400)
   par(mfcol=n2mfrow(N.species),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
+  LimX=c(min(DATA.list$`Sandbar shark`$year),max(DATA.list$`Sandbar shark`$year))
   for(i in Species.cpue)
   {
     Nml=fn.nmnl(dat=subset(DATA.list[[i]],FixedStation=="YES" & BOTDEPTH<210),REL="YES")
@@ -4933,7 +4959,7 @@ if(Do.abundance=="YES")
     
     MaX=max(c(dummy$UP/mean(dummy$MEAN),Nml$up95),na.rm=T)
     
-    INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,YLIM=c(0,MaX),Type="points")
+    INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,YLIM=c(0,MaX),XLIM=LimX,Type="points")
     
     #add nominal
     #with(Nml,points(year+Plus, mean, "o", pch=16, lty=2, col="grey50"))
@@ -4944,7 +4970,8 @@ if(Do.abundance=="YES")
   }
   mtext("Relative CPUE",2,outer=T,line=-0.5,cex=1.5,las=3)
   mtext("Year",1,outer=T,line=0.5,cex=1.5)
-  legend('topright',c("standardised","nominal"),bty='n',cex=1.25,pch=19,col=c("black","grey70"))
+  plot.new()
+  legend('topright',c("standardised","nominal"),bty='n',cex=1.5,pch=19,col=c("black","grey70"))
   dev.off()
   
   
@@ -4977,7 +5004,7 @@ if(Do.abundance=="YES")
     MaX=max(c(dummy$UP/mean(dummy$MEAN),Nml$up95),na.rm=T)
     
     INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,
-                                YLIM=c(0,MaX),Type="points")
+                                YLIM=c(0,MaX),XLIM=LimX,Type="points")
     #add nominal
     with(Nml,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
     suppressWarnings(with(Nml,arrows(x0=year+Plus, y0=low95,x1=year+Plus, y1=up95, 
@@ -5047,56 +5074,69 @@ if(Do.abundance=="YES")
   #2. Effect of latitude on size   
     #fixed stations
   fn.fig("Paper/Figure 6",2400,2400)
-  par(mfcol=n2mfrow(N.species.size),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
+  par(mfcol=n2mfrow(N.species.size-sum(sapply(PRED.lat.size,is.null))),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
   for(i in 1:N.species.size)
   {
     dummy=PRED.lat.size[[i]]
-    names(dummy)[6:7]=c("lower.CL","upper.CL")
-    dummy=cbind(dummy,CV=NA)
-    dummy$yr=dummy$Mid.Lat
-    dummy$MEAN=dummy$emmean
-    dummy$UP=dummy$upper.CL
-    dummy$LOW=dummy$lower.CL
-    a=fun.plot.yr.pred(dummy,X="Mid.Lat",normalised="YES",REV="NO",n.seq=1,YLIM=NULL,Type="polygon")
+    if(!is.null(dummy))
+    {
+      #names(dummy)[6:7]=c("lower.CL","upper.CL")
+      dummy=cbind(dummy,CV=NA)
+      dummy$yr=dummy$Mid.Lat
+      dummy$MEAN=dummy$emmean
+      dummy$UP=dummy$upper.CL
+      dummy$LOW=dummy$lower.CL
+      a=fun.plot.yr.pred(dummy,X="Mid.Lat",normalised="YES",REV="NO",n.seq=1,YLIM=NULL,XLIM=NULL,Type="polygon")
+      LGn=names(PRED.lat.size)[i]
+    }
     
-    dd1=as.data.frame(Store.size[[i]]$Signifcance)    #add p values
-    dd1=dd1[match("log.Mid.Lat",row.names(dd1)),]$'Pr(>Chi)'
-    P=NULL
-    if(dd1>=0.01 & dd1<0.05) P="*"
-    if(dd1>=0.001 & dd1<0.01) P="**"
-    if(dd1<0.001) P="***"
-    LGn=names(PRED.lat.size)[i]
-    if(!is.null(P)) LGn=paste(LGn,P)
+    if(ADD.P=="YES")
+    {
+      dd1=as.data.frame(Store.size[[i]]$Signifcance)    
+      dd1=dd1[match("log.Mid.Lat",row.names(dd1)),]$'Pr(>Chi)'
+      P=NULL
+      if(dd1>=0.01 & dd1<0.05) P="*"
+      if(dd1>=0.001 & dd1<0.01) P="**"
+      if(dd1<0.001) P="***"
+      if(!is.null(P)) LGn=paste(LGn,P)
+    }
     mtext(LGn,3,line=.05,cex=1.1)
   }
   mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
-  mtext("Latitude (?S)",1,outer=T,line=0.5,cex=1.5)
+  mtext(expression(paste("Latitude (",degree,"S)",sep="")),1,outer=T,line=0.5,cex=1.5)
   dev.off()
   
   
   #3. Effect of depth on size
-    #fixed stations 
+    #fixed stations
+  limX=c(20,200)
   fn.fig("Paper/Figure 7",2400,2400)
-  par(mfcol=n2mfrow(N.species.size),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
+  par(mfcol=n2mfrow(N.species.size-sum(sapply(PRED.z.size,is.null))),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
   for(i in 1:N.species.size)
   {
     dummy=PRED.z.size[[i]]
-    names(dummy)[6:7]=c("lower.CL","upper.CL")
-    dummy=cbind(dummy,CV=NA)
-    dummy$yr=dummy$Mid.Lat
-    dummy$MEAN=dummy$emmean
-    dummy$UP=dummy$upper.CL
-    dummy$LOW=dummy$lower.CL
-    a=fun.plot.yr.pred(dummy,X="BOTDEPTH",normalised="YES",REV="NO",n.seq=10,YLIM=NULL,Type="polygon")
+    if(!is.null(dummy))
+    {
+      #names(dummy)[6:7]=c("lower.CL","upper.CL")
+      dummy=cbind(dummy,CV=NA)
+      dummy$yr=dummy$Mid.Lat
+      dummy$MEAN=dummy$emmean
+      dummy$UP=dummy$upper.CL
+      dummy$LOW=dummy$lower.CL
+      a=fun.plot.yr.pred(dummy,X="BOTDEPTH",normalised="YES",REV="NO",n.seq=10,YLIM=NULL,XLIM=limX,Type="polygon")
+      LGn=names(PRED.z.size)[i]
+    }
     
-    dd1=as.data.frame(Store.size[[i]]$Signifcance)    #add p values
-    dd1=dd1[match("log.BOTDEPTH",row.names(dd1)),]$'Pr(>Chi)'
-    P=NULL
-    if(dd1>=0.01 & dd1<0.05) P="*"
-    if(dd1>=0.001 & dd1<0.01) P="**"
-    if(dd1<0.001) P="***"
-    LGn=names(PRED.z.size)[i]
-    if(!is.null(P)) LGn=paste(LGn,P)
+    if(ADD.P=="YES")
+    {
+      dd1=as.data.frame(Store.size[[i]]$Signifcance)    #add p values
+      dd1=dd1[match("log.BOTDEPTH",row.names(dd1)),]$'Pr(>Chi)'
+      P=NULL
+      if(dd1>=0.01 & dd1<0.05) P="*"
+      if(dd1>=0.001 & dd1<0.01) P="**"
+      if(dd1<0.001) P="***"
+      if(!is.null(P)) LGn=paste(LGn,P)
+    }
     mtext(LGn,3,line=.05,cex=1.1)
   }
   mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
@@ -5106,23 +5146,69 @@ if(Do.abundance=="YES")
   
   #4. Effect of time on size
     #fixed stations 
+  fn.nmnl.size=function(dat,REL)
+  {
+    d = dat %>%
+      mutate(year=as.numeric(as.character(year)))%>%
+      group_by(year) %>%
+      summarise(n = length(FL),
+                mean = mean(FL),
+                sd = sd(FL),
+                se = sd/(sqrt(n)),
+                lowCL= mean-1.96*se,
+                uppCL= mean+1.96*se) %>%
+      as.data.frame
+    
+    if(REL=="YES")
+    {
+      Mn=mean(d$mean,na.rm=T)
+      d$mean=d$mean/Mn
+      d$low95=d$lowCL/Mn
+      d$up95=d$uppCL/Mn
+    }
+    all.yrs=seq(YEAR[1],d$year[length(d$year)])
+    msn.yr=all.yrs[which(!all.yrs%in%d$year)]  
+    msn.yr.dummy=d[1:length(msn.yr),]
+    msn.yr.dummy[,]=NA
+    msn.yr.dummy$year=msn.yr
+    d=rbind(d,msn.yr.dummy)
+    d=d[order(d$year),]
+    return(d)
+  }
   INDEX.size=PRED.size
+  LimX=c(min(DATA.list$`Sandbar shark`$year),max(DATA.list$`Sandbar shark`$year))
   fn.fig("Paper/Figure 5",2400,2400)
-  par(mfcol=n2mfrow(N.species.size),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
+  par(mfcol=n2mfrow(N.species.size),mai=c(.3,.38,.15,.25),oma=c(2,1.25,1,2),las=1,mgp=c(.04,.6,0))
   for(i in 1:N.species.size)
   {
     dummy=PRED.size[[i]]
-    names(dummy)[5:6]=c("lower.CL","upper.CL")
+    #names(dummy)[5:6]=c("lower.CL","upper.CL")
     dummy$yr=dummy$Mid.Lat
     dummy$MEAN=dummy$emmean
     dummy$UP=dummy$upper.CL
     dummy$LOW=dummy$lower.CL
     dummy$CV=100*dummy$SE/dummy$MEAN
-    INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL,Type="points")
+    INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points")
+    
+    #add observed mean size and size at maturity
+    par(new = T)
+    Nml.size=fn.nmnl.size(dat=Store.size[[i]]$DAT,REL="NO")
+    with(Nml.size,plot(year+Plus, mean, pch=16, cex=1.25, col="grey70",axes=F,
+                       xlab=NA, ylab=NA,ylim=c(0,max(Nml.size$uppCL,na.rm=T)),xlim=LimX))
+    # with(Nml.size,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
+    suppressWarnings(with(Nml.size,arrows(x0=year+Plus, y0=lowCL,x1=year+Plus, y1=uppCL, 
+                                     code=3, angle=90, length=0.025, col="grey70")))
+    axis(side = 4,cex.axis=1.25)
+    abline(h=Fem.Size.Mat[[match(TARGETS.name[i],names(Fem.Size.Mat))]],col="grey40",lwd=1.5,lty=3)   
+    
+    
     mtext(names(PRED.z.size)[i],3,line=.05,cex=1.1)
   }
   mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
   mtext("Year",1,outer=T,line=0.5,cex=1.5)
+  plot.new()
+  legend('topright',c("standardised","nominal"),bty='n',cex=1.5,pch=19,col=c("black","grey70"))
+  mtext("Size (cm)",4,outer=T,line=0.5,cex=1.5,las=3,col="grey70")
   dev.off()
   
   
@@ -5140,13 +5226,13 @@ if(Do.abundance=="YES")
   for(i in San.dusky.species)
   {
     dummy=PRED.size[[i]]
-    names(dummy)[5:6]=c("lower.CL","upper.CL")
+    #names(dummy)[5:6]=c("lower.CL","upper.CL")
     dummy$yr=dummy$Mid.Lat
     dummy$MEAN=dummy$emmean
     dummy$UP=dummy$upper.CL
     dummy$LOW=dummy$lower.CL
     dummy$CV=100*dummy$SE/dummy$MEAN
-    INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL,Type="points")
+    INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points")
     mtext(names(PRED.z.size)[i],3,line=.05,cex=1.1)
   }
   mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
