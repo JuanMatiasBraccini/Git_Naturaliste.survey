@@ -63,7 +63,7 @@ library(imputeTS)
 #see great vignette: https://cran.r-project.org/web/packages/pscl/vignettes/countreg.pdf
 library("countreg")
 
-#Define user 
+#Define user
 User="Matias"
 #User="Dany"
 
@@ -115,12 +115,12 @@ West.lon.bound=with(Fixed.Stations,min(c(Long.1,Long.2)))
 East.lon.bound=with(Fixed.Stations,max(c(Long.1,Long.2)))
 
 #Southern Oscillation Index
-if(User=="Matias") SOI=read.csv("C:/Matias/Data/SOI.1975_2017.csv")
+if(User=="Matias") SOI=read.csv("C:/Matias/Data/Oceanography/SOI.csv")
 if(User=="Dany") SOI=read.csv("C:/Matias/Data/SOI.1975_2013.csv")
-names(SOI)[1]="Month"
+
 
 #Mean Freo sea level
-if(User=="Matias") Freo=read.csv("C:/Matias/Data/Freo_mean_sea_level.csv")
+if(User=="Matias") Freo=read.csv("C:/Matias/Data/Oceanography/Freo_mean_sea_level.csv")
 if(User=="Dany") Freo=read.csv("C:/Matias/Data/Freo_mean_sea_level.csv")
 names(Freo)[c(1,3)]=c("Year","Freo")
 
@@ -217,6 +217,15 @@ fn.check.size.gr=function(SPEC)
 fn.check.size.gr(SPEC='GM')
 fn.check.size.gr(SPEC='WH')
 
+#Output scalefish size data for Jef Norris
+Jeff=DATA%>%filter(!BOAT%in%c("FLIN","HAM","HOU","NAT","RV BREAKSEA","RV Gannet","RV GANNET","RV SNIPE 2") &
+                     Mid.Lat<=(-31) & Mid.Long>115.5 & Method=="GN" & !is.na(TL) & 
+                     SPECIES%in%c("PS.T","QS.T","RS.T","BG.T"))%>%
+            select(c("SPECIES","SCIENTIFIC_NAME","COMMON_NAME","TYPE","SHEET_NO","date","year",
+                      "Month","TL","Method","BOAT","BLOCK","Mid.Lat","Mid.Long","BOTDEPTH",
+                      "MESH_SIZE","MESH_DROP","NET_LENGTH","SOAK.TIME"))
+colnames(Jeff)=tolower(colnames(Jeff))
+write.csv(Jeff,"C:/Matias/Analyses/Catch and effort/Data_Resquests/Jeff N/Scalefish_size.csv",row.names = F)
 
 #Depth distribution of sandbar off Perth
 fn.chck.dep.range=function(SP,LAT.RANGE,LONG.RANGE,GEAR,YLIM,XLIM)
