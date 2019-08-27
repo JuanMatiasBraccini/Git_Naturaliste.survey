@@ -59,6 +59,7 @@ library(doParallel)
 library(geosphere)
 library(imputeTS)
 
+
 #install.packages("countreg", repos = "http://R-Forge.R-project.org")
 #see great vignette: https://cran.r-project.org/web/packages/pscl/vignettes/countreg.pdf
 library("countreg")
@@ -88,7 +89,7 @@ if(User=="Matias")
 }
 
 
-# -- DATA SECTION --
+# DATA SECTION ------------------------------------------------------------
 
 #Sharks data base 
 if(User=="Matias") source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Source_Shark_bio.R")
@@ -148,7 +149,7 @@ if(User=="Matias")
 }
 
 
-# -- CONTROL SECTION --
+# CONTROL SECTION ---------------------------------------------------------
 
 export.dat.hard.drive="NO"  #control if exporting copy of data to external hard drive
 bySEX="YES"  #control if size frequency separated by sex or not
@@ -198,7 +199,7 @@ Max.depth=3  #(in metres)
 
 
 
-# -- PROCEDURE SECTION --
+# PROCEDURE SECTION -------------------------------------------------------
 
 #Check size distribution by gear
 fn.check.size.gr=function(SPEC)
@@ -377,7 +378,7 @@ DATA=subset(DATA,BOAT%in%Boats & N.hooks>=0  &
 
 
 #Add Freo and SOI
-DATA=merge(DATA,SOI, by.x=c("Month","year"),by.y=c("Month","Year.soi"),all.x=T)
+DATA=merge(DATA,SOI, by.x=c("Month","year"),by.y=c("Month","Year"),all.x=T)
 DATA=merge(DATA,Freo, by.x=c("Month","year"),by.y=c("Month","Year"),all.x=T)
 
 #remove Gummy, missindentification
@@ -404,7 +405,6 @@ unknown.species=c("SX")
 
 DATA=subset(DATA,!SPECIES%in%unknown.species)
 all.species=unique(c(DATA$SPECIES,DATA.DL$SPECIES))
-
 
 N.species=function(DAT,what,SP)
 {
@@ -497,7 +497,7 @@ Table.1[is.na(Table.1)]=""
 names(Table.1)[match("LL.Numbers",names(Table.1))]=paste("LL.Numbers_",Yrs.LL[1],"-",Yrs.LL[length(Yrs.LL)],sep="")
 names(Table.1)[match("DL.Numbers",names(Table.1))]=paste("DL.Numbers_",Yrs.DL[1],"-",Yrs.DL[length(Yrs.DL)],sep="")
 
-Req.shrk=vapply(strsplit(Prop.requiem.sharks$SCIENTIFIC_NAME, " ", fixed = TRUE), "[", "", 1)
+Req.shrk=vapply(strsplit(Table.1$SCIENTIFIC_NAME, " ", fixed = TRUE), "[", "", 1)
 Req.shrk=c(Table.1$Species[which(Req.shrk=="Carcharhinus")],"MI","TG","SE","LE","TA","GB")
 Prop.requiem.sharks=Table.1%>%mutate(Requiem=ifelse(Species%in%Req.shrk,"YES","NO")) %>%
                               rename(N='LL.Numbers_2001-2017')%>%
@@ -542,8 +542,6 @@ DATA.DL$COMMON_NAME=with(DATA.DL,ifelse(COMMON_NAME=="Common blacktip shark","Bl
 
 DATA$SCIENTIFIC_NAME=with(DATA,ifelse(SCIENTIFIC_NAME=="Carcharhinus limbatus/tilstoni","Carcharhinus limbatus",SCIENTIFIC_NAME))
 DATA.DL$SCIENTIFIC_NAME=with(DATA.DL,ifelse(SCIENTIFIC_NAME=="Carcharhinus limbatus/tilstoni","Carcharhinus limbatus",SCIENTIFIC_NAME))
-
-
 
 
 #Fix N.hook numbers
@@ -758,7 +756,8 @@ DATA$depth.bin=10*round(DATA$BOTDEPTH/10)
 DATA$TEMP1.bin=floor(DATA$TEMP1)
 DATA$Mid.Lat.bin=floor(abs(DATA$Mid.Lat))
 
-#1. CATCH RATES FROM FISHERY INDEPENDENT SURVEYS
+
+# 1. CATCH RATES FROM FISHERY INDEPENDENT SURVEYS ----------------------------------------------------------------------
 #References: Zuur et al. Zero inflated models and generalized linear mixed models with R
 if(Do.abundance=="YES")
 {
@@ -1452,6 +1451,43 @@ if(Do.abundance=="YES")
   
   if(do.GAM=="YES" & Select.term=="YES")
   {
+    LOgLik=function(MoD)  #get model Loglikelihood
+    {
+      if(!is.null(MoD))
+      {
+        if(class(MoD)[1]%in%c("zinbgam","zipgam")) LOgL=MoD$logL[length(MoD$logL)] else
+          LOgL=as.numeric(logLik(MoD))
+      }
+      
+      if(is.null(MoD))LOgL=NA
+      return(LOgL)
+    }
+    fn.AIC=function(MoD)  #get AIC
+    {
+      return(MoD$aic)
+    }
+    fn.AICc=function(MoD,LoGLike)  #get AICc (not applicable if all models have same number of parameter)
+    {
+      if(!is.null(MoD))
+      {
+        Sample.size=dim(model.matrix(MoD))[1]
+        Num.pars=dim(model.matrix(MoD))[2]
+        AIC.c=-2*LoGLike+(2*Num.pars*(Sample.size/(Sample.size-Num.pars-1)))
+      }
+      return(AIC.c)
+    }
+    fn.AIC.ratio=function(DAT)
+    {
+      MIN=min(DAT,na.rm=T)
+      Delta=DAT-MIN
+      Like.model.give.dat=exp(-Delta/2)
+      Weight=Like.model.give.dat/sum(Like.model.give.dat,na.rm=T)
+      id=which(Weight==max(Weight,na.rm=T))
+      names(Weight)=NULL
+      Evidence.ratio=c(outer(Weight[id],Weight, "/"))
+      return(list(Best.Mod=id,Delta=Delta,Like=Like.model.give.dat,Weight=Weight,Evidence.ratio_how.much.better=Evidence.ratio))
+    }
+    
     cl <- makeCluster(detectCores()-1)
     registerDoParallel(cl)
     getDoParWorkers()
@@ -1482,13 +1518,14 @@ if(Do.abundance=="YES")
           }
         for(t in 1:length(Terms))names(tested.mods)[t]=paste(Terms[1:t],collapse="+")
         return(tested.mods)
-      }})    #takes 50 seconds
+      }})    #takes 8 minutes
     names(Select.term_error)=names(DATA.list)
     stopCluster(cl) 
     
-    #  Select best model terms (i.e. model structure)
+    #  Select best model terms (i.e. model structure) based on AIC and deviance explained
     Select.best.modl.str=function(d)
     {
+      #set up table
       TeRms=names(d)
       Dev.Exp=as.data.frame(matrix(NA,nrow=length(TeRms),ncol=1+length(names(d[[1]]))))
       colnames(Dev.Exp)=c("Term",names(d[[1]]))
@@ -1504,6 +1541,7 @@ if(Do.abundance=="YES")
       }
       AiC=Dev.Exp
       
+      #fill in table
       for(t in 1:nrow(Dev.Exp))
       {
         id=match(names(d[[t]]),names(Dev.Exp))
@@ -1520,7 +1558,25 @@ if(Do.abundance=="YES")
           }
         }
       }
-      return(list(AIC=AiC,Deviance.exp=Dev.Exp))
+      
+      #Get formulas
+      teRmS=rep(NA,length(d))
+      for(t in 1:length(d)) teRmS[t]=paste(Res.var,paste(c(names(d)[t],Offset),collapse="+"),sep="~")
+      
+      #Get AIC derives
+      AIC.der=vector('list',length=length(2:ncol(AiC)))
+      names(AIC.der)=colnames(AiC)[2:ncol(AiC)]
+      Best=AIC.der
+      for(t in 2:ncol(AiC))
+      {
+        AIC.w.r=fn.AIC.ratio(AiC[,t])
+        AIC.der[[t-1]]=data.frame(AIC=round(AiC[,t],1),
+                     deltaAIC=round(AIC.w.r$Delta,1),
+                     AIC.weight=formatC(AIC.w.r$Weight, format = "e", digits = 1))
+        Best[[t-1]]=teRmS[AIC.w.r$Best.Mod]
+      }
+      AiC.tabl=cbind(Model=teRmS,do.call(cbind,AIC.der))
+      return(list(AIC=AiC.tabl,Deviance.exp=Dev.Exp,Best=unlist(Best)))
     }
     SLCT.TRM=vector('list',length(Species.cpue))
     names(SLCT.TRM)=names(DATA.list)
@@ -1528,8 +1584,10 @@ if(Do.abundance=="YES")
     AIC.terms=do.call(rbind,lapply(SLCT.TRM, `[[`, 1))
     Resid.deviance.terms=do.call(rbind,lapply(SLCT.TRM, `[[`, 2))
     write.csv(AIC.terms,paste(getwd(),"/Model selection/AIC.terms.csv",sep=''))
+    Resid.deviance.terms=Resid.deviance.terms%>%rename(Model=Term)
+    Resid.deviance.terms$Model=AIC.terms$Model
     write.csv(Resid.deviance.terms,paste(getwd(),"/Model selection/Deviance.explained.by.terms.csv",sep=''))
-    Best.SLCT.TRM=SLCT.TRM
+    Best.SLCT.TRM=SLCT.TRM  
     for(i in Species.cpue)
     {
       d=Best.SLCT.TRM[[i]]$Deviance.exp
@@ -1540,7 +1598,7 @@ if(Do.abundance=="YES")
         d1=d[,c(1,p+1)]%>%mutate(Prev=lag(d[,p+1],1),
                                  Exp.per=d[,p+1]-Prev,
                                  Exp.per=ifelse(is.na(Exp.per),10,Exp.per))
-        Best.terms[[p]]=d1$Term[which(d1$Exp.per>2)]
+        Best.terms[[p]]=d1$Term[which(d1$Exp.per>1)]
       }
       Best.SLCT.TRM[[i]]=Best.terms
     }
@@ -1581,43 +1639,7 @@ if(Do.abundance=="YES")
     names(Select.error)=names(DATA.list)
     stopCluster(cl) 
     
-    #output pdf
-    LOgLik=function(MoD)  #get model Loglikelihood
-    {
-      if(!is.null(MoD))
-      {
-        if(class(MoD)[1]%in%c("zinbgam","zipgam")) LOgL=MoD$logL[length(MoD$logL)] else
-          LOgL=as.numeric(logLik(MoD))
-      }
-      
-      if(is.null(MoD))LOgL=NA
-      return(LOgL)
-    }
-    fn.AIC=function(MoD)  #get AIC
-    {
-      return(MoD$aic)
-    }
-    fn.AICc=function(MoD,LoGLike)  #get AICc (not applicable if all models have same number of parameter)
-    {
-      if(!is.null(MoD))
-      {
-        Sample.size=dim(model.matrix(MoD))[1]
-        Num.pars=dim(model.matrix(MoD))[2]
-        AIC.c=-2*LoGLike+(2*Num.pars*(Sample.size/(Sample.size-Num.pars-1)))
-      }
-      return(AIC.c)
-    }
-    fn.AIC.ratio=function(DAT)
-    {
-      MIN=min(DAT,na.rm=T)
-      Delta=DAT-MIN
-      Like.model.give.dat=exp(-Delta/2)
-      Weight=Like.model.give.dat/sum(Like.model.give.dat,na.rm=T)
-      id=which(Weight==max(Weight,na.rm=T))
-      names(Weight)=NULL
-      Evidence.ratio=c(outer(Weight[id],Weight, "/"))
-      return(list(Best.Mod=id,Delta=Delta,Like=Like.model.give.dat,Weight=Weight,Evidence.ratio_how.much.better=Evidence.ratio))
-    }
+    #output pdf  #ACA
     CL=c("grey50","grey80","blue","cornflowerblue")
     fn.pred=function(term,DAT,MOD,Nml)
     {
@@ -1661,21 +1683,28 @@ if(Do.abundance=="YES")
       
     }
     mx.lev=function(x) factor(names(which(table(x)==max(table(x)))) ,levels=levels(x))
-    Gam.fit.diag=function(MOD)
+    Gam.fit.diag=function(MOD,SP)
     {
       par(mfcol=c(2,2))
       for(m in 1:length(MOD))
       {
+        Nm=ifelse(names(MOD)[m]=="Pois","Poisson",
+                  ifelse(names(MOD)[m]=="NB","Negative binomial",
+                         ifelse(names(MOD)[m]=="ZIP","Zero-inflated Poisson",
+                                "Zero-inflated negative binomial")))
         if(class(MOD[[m]])[1]%in%c("zipgam","zinbgam"))
         {
           gam.check(MOD[[m]][[1]])
-          mtext(paste(names(MOD)[m],"counts part"),3,outer=T,line=-1.5,cex=1.5)
+          mtext(paste("Figure ",i,".",m,". ",SP," fit diagnostics. ",Nm,
+                      " distribution, counts part",sep=''),3,outer=T,line=-1.5,cex=.8)
           gam.check(MOD[[m]][[2]])
-          mtext(paste(names(MOD)[m],"binomial part"),3,outer=T,line=-1.5,cex=1.5)
+          mtext(paste("Figure ",i,".",m,". ",SP," fit diagnostics. ",Nm,
+                      " distribution, binomial part",sep=''),3,outer=T,line=-1.5,cex=.8)
         }else
         {
           gam.check(MOD[[m]])
-          mtext(names(MOD)[m],3,outer=T,line=-1.5,cex=1.5)
+          mtext(paste("Figure ",i,".",m,". ",SP," fit diagnostics. ",Nm,
+                      " distribution",sep=''),3,outer=T,line=-1.5,cex=1)
         }
       }
     }
@@ -1683,22 +1712,22 @@ if(Do.abundance=="YES")
     pdf(paste(hndLs,"/Model selection/Compare error.pdf",sep=""))
     
     #table of deviance explained for each term
-    plot.new()
-    mytheme <- gridExtra::ttheme_default(
-      core = list(padding=unit(c(1, 1), "mm"),fg_params=list(cex = .75)),
-      colhead = list(fg_params=list(cex = .8)),
-      rowhead = list(fg_params=list(cex = .8)))
-    myt <- gridExtra::tableGrob(Resid.deviance.terms[1:21,], theme = mytheme)
-    grid.draw(myt)
-    mtext("Deviance explained",3,line=2,cex=1.5)
-    
-    plot.new()
-    mytheme <- gridExtra::ttheme_default(
-      core = list(padding=unit(c(1, 1), "mm"),fg_params=list(cex = .75)),
-      colhead = list(fg_params=list(cex = .8)),
-      rowhead = list(fg_params=list(cex = .8)))
-    myt <- gridExtra::tableGrob(Resid.deviance.terms[22:41,], theme = mytheme)
-    grid.draw(myt)
+    # plot.new()
+    # mytheme <- gridExtra::ttheme_default(
+    #   core = list(padding=unit(c(1, 1), "mm"),fg_params=list(cex = .75)),
+    #   colhead = list(fg_params=list(cex = .8)),
+    #   rowhead = list(fg_params=list(cex = .8)))
+    # myt <- gridExtra::tableGrob(Resid.deviance.terms[1:21,], theme = mytheme)
+    # grid.draw(myt)
+    # mtext("Deviance explained",3,line=2,cex=1.5)
+    # 
+    # plot.new()
+    # mytheme <- gridExtra::ttheme_default(
+    #   core = list(padding=unit(c(1, 1), "mm"),fg_params=list(cex = .75)),
+    #   colhead = list(fg_params=list(cex = .8)),
+    #   rowhead = list(fg_params=list(cex = .8)))
+    # myt <- gridExtra::tableGrob(Resid.deviance.terms[22:41,], theme = mytheme)
+    # grid.draw(myt)
 
     for(i in Species.cpue)
     {
@@ -1717,6 +1746,11 @@ if(Do.abundance=="YES")
       id.best=which(AIC.w.r$Weight==max(AIC.w.r$Weight,na.rm=T))
       Best.error.AIC.w=rownames(Compare)[id.best]
       Best.formula=formula(paste(Res.var,paste(c(Terms[id.best],Offset),collapse="+"),sep="~"))
+      Compare=Compare%>%rename('Log likelihood'=Log.Like,
+                               AIC=AIC.c,
+                               'delta AIC'=AIC.delta,
+                               'AIC weight'=AIC.w,
+                               'Evidence ratio'=AIC.Ev.ratio)
       plot.new()
       mytheme <- gridExtra::ttheme_default(
         core = list(padding=unit(c(1, 1), "mm"),fg_params=list(cex = 1)),
@@ -1724,11 +1758,14 @@ if(Do.abundance=="YES")
         rowhead = list(fg_params=list(cex = 1.25)))
       myt <- gridExtra::tableGrob(Compare, theme = mytheme)
       grid.draw(myt)
-     # legend('bottom',paste(c(paste("Best.AIC.w=",Best.error.AIC.w),Best.formula)),bty='n',cex=.7)
-      mtext(Tar.names[i],3,cex=1.5)
+    
+      mtext(paste('Table ',i,'. Summary of error selection for the best model structure of ',
+                  Tar.names[i],sep=""),3,cex=.9,adj=0)
+      mtext(c(" (Pois, Poisson; NB, Negative binomial;"),3,-1,cex=.9,adj=0)
+      mtext(c("ZIP, zero-inflated Poisson; ZINB, zero-inflated negative binomial)"),3,-2,cex=.9,adj=0)
       
       #model fit to data
-      Gam.fit.diag(MOD=Select.error[[i]])
+      Gam.fit.diag(MOD=Select.error[[i]],SP=names(Select.error)[i])
       
       par(mfcol=c(1,1))
       fn.pred(term="year",
@@ -1739,6 +1776,11 @@ if(Do.abundance=="YES")
                        Moon=factor(Moon,levels=c("Full","Waning","New","Waxing"))),
               MOD=Select.error[[i]],
               Nml=fn.nmnl(dat=subset(DATA.list[[i]],FixedStation=="YES"),REL="YES"))
+      mtext(paste("Figure ",i,".",5,". ",names(Select.error)[i]," Predicted annual relative cpue",
+                  sep=''),3,line=2.5,cex=1,adj=0)
+      mtext(paste("(Pois, Poisson; NB, negative binomial;",sep=''),3,line=1.5,cex=1,adj=0)
+      mtext(paste("ZIP, zero-inflated Poisson; ZINB, zero-inflated negative binomial)",sep=''),3,
+            line=0.5,cex=1,adj=0)
       
     }
     dev.off()
@@ -2140,16 +2182,14 @@ if(Do.abundance=="YES")
         if(!is.null(MoD)) AIc=AIC(MoD)
         return(AIc)
       }
-      fn.AICc=function(DAT)  #get AICc
+      fn.AICc=function(MoD)  #get AICc
       {
-        DAT1=DAT[[1]]
         AIC.c=NA
-        if(!is.null(DAT1))
+        if(!is.null(MoD))
         {
-          Sample.size=dim(model.matrix(DAT1))[1]
-          Num.pars=dim(model.matrix(DAT1))[2]
-          LoGLike=logLik(DAT1)[1]
-          AIC.c=-2*LoGLike+(2*Num.pars*(Sample.size/(Sample.size-Num.pars-1)))
+          Sample.size=dim(model.matrix(MoD))[1]
+          Num.pars=dim(model.matrix(MoD))[2]
+          AIC.c=AIC(MoD)+((2*Num.pars^2+2*Num.pars)/(Sample.size+Num.pars+1))
         }
         #if(names(DAT)=="Tweed" & !is.null(DAT[[1]])) AIC.c=AICtweedie(DAT[[1]])
         return(AIC.c)
@@ -2889,17 +2929,23 @@ if(Do.abundance=="YES")
   #1.11.3  Fit Best model and error structure 
   if(do.GAM=="YES")
   {
-    TermS=c("year","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)")
     BEST.model=vector('list',N.species)
     names(BEST.model)=names(DATA.list)
-    for(i in 1:N.species)BEST.model[[i]]=formula(paste(Res.var,paste(c(TermS,Offset),collapse="+"),sep="~"))
-    BEST.model$'Spot-tail shark'=BEST.model$'Tiger shark'=
-      formula(paste(Res.var,paste(c("year","s(Mid.Lat,k=3)",Offset),collapse="+"),sep="~"))
-    BEST.model$'Scalloped hammerhead'= BEST.model$'Sliteye shark'=
-      formula(paste(Res.var,paste(c("year","s(BOTDEPTH,k=3)",Offset),collapse="+"),sep="~"))
-    
-    BEST.model$"Dusky shark"=formula(paste(Res.var,paste(c("year","s(Mid.Lat,k=3)","Moon",Offset),collapse="+"),sep="~"))
-    
+    BEST.model$'Milk shark'=BEST.model$'Tiger shark'=
+      formula(paste(Res.var,paste(c("year","s(Mid.Lat,k=3)",
+                                    "s(BOTDEPTH,k=3)",Offset),collapse="+"),sep="~"))
+    BEST.model$'Sandbar shark'=formula(paste(Res.var,paste(c("year","Month","s(Mid.Lat,k=3)",
+                                    "s(BOTDEPTH,k=3)","s(Temp.res,k=3)","Moon",Offset),
+                                    collapse="+"),sep="~"))
+    BEST.model$`Spot-tail shark`=BEST.model$`Blacktip sharks`=
+      formula(paste(Res.var,paste(c("year","s(Mid.Lat,k=3)",
+                                    "s(BOTDEPTH,k=3)","s(Temp.res,k=3)",Offset),collapse="+"),sep="~"))
+    BEST.model$'Scalloped hammerhead'= formula(paste(Res.var,paste(c("year",
+                                         "s(BOTDEPTH,k=3)",Offset),collapse="+"),sep="~"))
+    BEST.model$"Dusky shark"=formula(paste(Res.var,paste(c("year","s(Mid.Lat,k=3)","Moon",
+                                     Offset),collapse="+"),sep="~"))
+    BEST.model$'Sliteye shark'=formula(paste(Res.var,paste(c("year",
+                                "s(BOTDEPTH,k=3)",Offset),collapse="+"),sep="~"))   
     ERROR.st=BEST.model
     for(i in 1:N.species)ERROR.st[[i]]="NB"
   }
@@ -3011,7 +3057,7 @@ if(Do.abundance=="YES")
     rm(DAT,TT,d)
   })
   
-  #Is there a non-linear relation in residuals that requires GAM?    NOT applicable anymore....
+  #Is there a non-linear relation in residuals that requires GAM?    NOT applicable anymore as I am already using GAMs....
   #note: if Pearson residuals vs the covariate shows a clear pattern 
   #       (i.e. Significant Anova), then GAM is needed (i.e. covariates
   #       must be modelled thru a polynomial as it is not linearly related
@@ -3655,6 +3701,8 @@ if(Do.abundance=="YES")
   
   #1.14.   Trends in size
   #fit gaussian model to Fixed stations
+  TARGETS.size=TARGETS
+  N.species.size=length(TARGETS.size)
   BEST.model.size=BEST.model
   for(i in 1:N.species.size) BEST.model.size[[i]]=formula(paste("FL",paste(c("year",
                                   's(Mid.Lat,k=3)','s(BOTDEPTH,k=3)'),collapse="+"),sep="~"))
@@ -3701,8 +3749,7 @@ if(Do.abundance=="YES")
     
     return(list(Fit=model,DAT=dat,year.pred=year.pred,Lat.pred=Lat.pred,Depth.pred=Depth.pred))
   }
-  TARGETS.size=TARGETS
-  N.species.size=length(TARGETS.size)
+  
   Store.size=vector('list',N.species.size)
   names(Store.size)=names(TARGETS.size)
   for (i in 1:N.species.size)
@@ -3728,12 +3775,35 @@ if(Do.abundance=="YES")
   }
     
   #Goodnes of fit 
+  Pos.Diag.fn=function(MODEL,M=1)   #function for fit diagnostics
+  {
+    RES=MODEL$residuals   #residuals
+    Std.RES=RES/sd(RES)   #standardised residuals (res/SD(res))
+    PRED=predict(MODEL)
+    
+    qqnorm(RES,main="",ylab="",xlab="")
+    qqline(RES, col = 'grey40',lwd=1.5,lty=2)
+    #mtext(SPECIES,3,outer=F,line=0.25,cex=1.3)
+    if(i==4) mtext("Residuals",2,outer=F,line=1.3,las=3,cex=M)
+    # mtext("                        Theoretical quantiles",1,outer=F,line=1.5,cex=M)
+    
+    hist(Std.RES,xlim=c(-5,5),ylab="",xlab="",main="",col="grey",breaks=50)
+    box()
+    if(i==4)  mtext("Frequency",2,outer=F,line=1.3,las=3,cex=M)
+    #mtext("                      Standardised residuals",1,outer=F,line=1.5,cex=M)
+    
+    plot(PRED,Std.RES,ylab="",xlab="",ylim=c(-5,5))
+    abline(0,0,lwd=1.5,lty=2,col='grey40')
+    if(i==4)  mtext("Standardised residuals",2,outer=F,line=1.3,las=3,cex=M)
+    #mtext("                         Fitted values",1,outer=F,line=1.5,cex=M)
+    
+  }
   hndl.fit.size="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Size/"
   fn.fig(paste(hndl.fit.size,"fit.diagnostics",sep=""),1600,2400)
-  par(mfrow=c(8,4),mar=c(2,2,1.5,1),oma=c(1,1.5,.1,2),mgp=c(2,.7,0))
+  par(mfrow=c(8,3),mar=c(2,2,1.5,1),oma=c(1,1.5,.1,2),mgp=c(2,.7,0))
   for(i in 1:N.species.size)
   {
-    plot(Store.size[[i]]$Fit)
+    Pos.Diag.fn(MODEL=Store.size[[i]]$Fit,M=1)
     mtext(names(TARGETS)[i],4,las=3,line=1,cex=.6)
   }
   dev.off()
@@ -3750,8 +3820,7 @@ if(Do.abundance=="YES")
   }
 }
 
-
-#2. Multivariate analysis and Ecosystem indicators   MISSING:  USE Fixed Stations only!
+# 2. Multivariate analysis and Ecosystem indicators   MISSING:  USE Fixed Stations only! ----------------------------------------------------------------------
 if(Do.multivariate=="YES")
 {
   hndl.eco="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Ecosystems/"
@@ -4346,10 +4415,7 @@ if(Do.multivariate=="YES")
 }
 
 
-
-# -- REPORT SECTION --
-
-#1. CATCH RATES FROM FISHERY INDEPENDENT SURVEYS
+# REPORT_CATCH RATES FROM FISHERY INDEPENDENT SURVEYS----------------------------------------------------------------------
 if(Do.abundance=="YES")
 {
   setwd("C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Abundance")
@@ -4986,7 +5052,7 @@ if(Do.abundance=="YES")
   
   #5. Export Sandbar and Dusky sharks index   
       #Fixed stations
-  hnd.indx="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Index/"
+  hnd.indx="C:/Matias/Analyses/Data_outs/"
   write.csv(INDEX$"Sandbar shark",paste(hnd.indx,"Sandbar.Srvy.FixSt.csv",sep=""),row.names=F)
   write.csv(INDEX$"Dusky shark",paste(hnd.indx,"Dusky.Srvy.FixSt.csv",sep=""),row.names=F)
 
@@ -5250,7 +5316,7 @@ if(Do.abundance=="YES")
 }
 
 
-#2. Ecosystem indicators FROM FISHERY INDEPENDENT SURVEYS    
+# REPORT_Ecosystem indicators FROM FISHERY INDEPENDENT SURVEYS----------------------------------------------------------------------
 if(Do.ecosystems=="YES")
 {
   if(do.glm.ecos=="YES")    
@@ -5430,7 +5496,7 @@ if(Do.ecosystems=="YES")
 }
 
 
-#3. MULTIVARIATE ANALYSIS OF CATCH COMPOSITION FROM FISHERY INDEPENDENT SURVEYS
+# REPORT_MULTIVARIATE ANALYSIS OF CATCH COMPOSITION FROM FISHERY INDEPENDENT SURVEYS----------------------------------------------------------------------
 if(Do.multivariate=="YES")
 {
   Hndl="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Multivariate/"
