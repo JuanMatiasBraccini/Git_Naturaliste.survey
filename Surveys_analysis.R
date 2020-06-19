@@ -140,7 +140,7 @@ Bathymetry=rbind(Bathymetry_120,Bathymetry_138)
 
 #Genetic tissue in stock
 #library(xlsx)
-#Gen.tissue=read.xlsx("M:/Fisheries Research/FinFish/Shark/Dani/Stored samples - STOCKTAKE.xlsx", 1)
+#Gen.tissue=read.xlsx("M:/Fisheries Research/FinFish/Shark/Dani/Samples/Stored samples - STOCKTAKE.xlsx", 1)
 if(User=="Matias")
 {
   PerthIs=read.table("C:/Matias/Data/Mapping/WAislandsPointsNew.txt", header=T) #function for reading txt file
