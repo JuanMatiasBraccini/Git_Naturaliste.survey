@@ -5053,7 +5053,7 @@ if(Do.abundance=="YES")
   #5. Export Sandbar and Dusky sharks index   
       #Fixed stations
   hnd.indx="C:/Matias/Analyses/Data_outs/"
-  for(i in 1:length(INDEX)) write.csv(INDEX[[i]],paste(hnd.indx,names(INDEX)[i],".Srvy.FixSt.csv",sep=""),row.names=F)
+  for(i in 1:length(INDEX)) write.csv(INDEX[[i]],paste(hnd.indx,names(INDEX)[i],'/',names(INDEX)[i],".Srvy.FixSt.csv",sep=""),row.names=F)
   
   
   
@@ -5289,7 +5289,7 @@ if(Do.abundance=="YES")
   
   #5. Export Sandbar and Dusky sharks index   
     #Fixed stations
-  for(i in 1:length(INDEX.size)) write.csv(INDEX.size[[i]],paste(hnd.indx,names(INDEX.size)[i],".Srvy.FixSt_size.csv",sep=""),row.names=F)
+  for(i in 1:length(INDEX.size)) write.csv(INDEX.size[[i]],paste(hnd.indx,names(INDEX.size)[i],'/',names(INDEX)[i],".Srvy.FixSt_size.csv",sep=""),row.names=F)
   
 
   
