@@ -24,7 +24,15 @@
 #         hence, did Monte Carlo or bootstrapping
 
 
-rm(list=ls(all=TRUE))
+
+# DATA SECTION ------------------------------------------------------------
+
+#Define user
+User="Matias"
+
+#Sharks data base 
+source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Source_Shark_bio.R")
+
 library(lubridate)  #for dates manipulation
 library(geosphere)
 library(ggplot2)
@@ -64,36 +72,14 @@ library(imputeTS)
 #see great vignette: https://cran.r-project.org/web/packages/pscl/vignettes/countreg.pdf
 library("countreg")
 
-#Define user
-User="Matias"
-#User="Dany"
-
-if(User=="Matias")
-{
-  source("C:/Matias/R/HighstatLibV6.R")  #for corvif ()
-  source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R")
-  source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Compare.error.structure.R")  
-}
-
-if(User=="Dany")
-{
-  source("C:/Matias/R/HighstatLibV6.R")  #for corvif ()
-  source("C:/Matias/Analyses/SOURCE_SCRIPTS/Plot.Map.R")
-  source("C:/Matias/Analyses/SOURCE_SCRIPTS/Compare.error.structure.R")  
-}
-
-if(User=="Matias")
-{
-  source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_Population.dynamics/fn.fig.R")
-  source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Smart_par.R")
-}
 
 
-# DATA SECTION ------------------------------------------------------------
+source("C:/Matias/R/HighstatLibV6.R")  #for corvif ()
+source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R")
+source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Compare.error.structure.R")  
+source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_Population.dynamics/fn.fig.R")
+source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Smart_par.R")
 
-#Sharks data base 
-if(User=="Matias") source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Source_Shark_bio.R")
-if(User=="Dany") source("C:/Matias/Analyses/SOURCE_SCRIPTS/Source_Shark_bio.R")
 
 
 #Get info for tiger sharks tissue samples
@@ -116,37 +102,28 @@ West.lon.bound=with(Fixed.Stations,min(c(Long.1,Long.2)))
 East.lon.bound=with(Fixed.Stations,max(c(Long.1,Long.2)))
 
 #Southern Oscillation Index
-if(User=="Matias") SOI=read.csv("C:/Matias/Data/Oceanography/SOI.csv")
-if(User=="Dany") SOI=read.csv("C:/Matias/Data/SOI.1975_2013.csv")
+SOI=read.csv("C:/Matias/Data/Oceanography/SOI.csv")
+
 
 
 #Mean Freo sea level
-if(User=="Matias") Freo=read.csv("C:/Matias/Data/Oceanography/Freo_mean_sea_level.csv")
-if(User=="Dany") Freo=read.csv("C:/Matias/Data/Freo_mean_sea_level.csv")
+Freo=read.csv("C:/Matias/Data/Oceanography/Freo_mean_sea_level.csv")
 names(Freo)[c(1,3)]=c("Year","Freo")
 
-if(User=="Matias")
-{
-  Bathymetry_120=read.table("C:/Matias/Data/Mapping/get_data112_120.cgi")
-  Bathymetry_138=read.table("C:/Matias/Data/Mapping/get_data120.05_138.cgi") 
-}
-if(User=="Dany")
-{
-  Bathymetry_120=read.table("C:/Matias/Data/Mapping/get_data112_120.cgi")
-  Bathymetry_138=read.table("C:/Matias/Data/Mapping/get_data120.05_138.cgi") 
-}
-
+#Depth
+Bathymetry_120=read.table("C:/Matias/Data/Mapping/get_data112_120.cgi")
+Bathymetry_138=read.table("C:/Matias/Data/Mapping/get_data120.05_138.cgi") 
 Bathymetry=rbind(Bathymetry_120,Bathymetry_138)
 
 #Genetic tissue in stock
 #library(xlsx)
 #Gen.tissue=read.xlsx("M:/Fisheries Research/FinFish/Shark/Dani/Samples/Stored samples - STOCKTAKE.xlsx", 1)
-if(User=="Matias")
-{
-  PerthIs=read.table("C:/Matias/Data/Mapping/WAislandsPointsNew.txt", header=T) #function for reading txt file
-  Rottnest.Is=subset(PerthIs,ID%in%c("ROTT1"))
-  Garden.Is=subset(PerthIs,ID%in%c("ROTT3"))
-}
+
+#Shapefiles
+PerthIs=read.table("C:/Matias/Data/Mapping/WAislandsPointsNew.txt", header=T) #function for reading txt file
+Rottnest.Is=subset(PerthIs,ID%in%c("ROTT1"))
+Garden.Is=subset(PerthIs,ID%in%c("ROTT3"))
+
 
 
 # CONTROL SECTION ---------------------------------------------------------
