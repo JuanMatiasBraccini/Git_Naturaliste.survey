@@ -62,16 +62,18 @@ Do.tiff="NO"
 
 # -- DATA SECTION --
 
+if(!exists('handl_OneDrive')) source('C:/Users/myb/OneDrive - Department of Primary Industries and Regional Development/Matias/Analyses/SOURCE_SCRIPTS/Git_other/handl_OneDrive.R')
+
 #Source Sharks data base 
-if(User=="Matias") source("C:/Matias/Analyses/SOURCE_SCRIPTS/Source_Shark_bio.R")
+if(User=="Matias") source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Source_Shark_bio.R"))
 if(User=="Dani") source("C:/Users/ddw/Documents/Projects/Naturaliste_longline/Source codes/Source_Shark_bio.R")
 rm(DATA)
 
 #Comments data  
 if(User=="Matias") 
 {
-  Comnt_Alive=read.csv("C:/Matias/Data/Naturaliste/Comments_Alive.csv")
-  Comnt_Dead=read.csv("C:/Matias/Data/Naturaliste/Comments_Dead.csv")
+  Comnt_Alive=read.csv(handl_OneDrive("Data/Naturaliste/Comments_Alive.csv"))
+  Comnt_Dead=read.csv(handl_OneDrive("Data/Naturaliste/Comments_Dead.csv"))
 }
 if(User=="Dani") 
 {
@@ -85,10 +87,10 @@ if(User=="Dani")
 #note: Diet is a csv file that must be manually updated each year. Data is presence/absence
 if(User=="Matias")
 {
-  Diet=read.csv("C:/Matias/Data/Naturaliste/Look.at.diet_1.csv")
-  Predator_TL=read.csv("C:/Matias/Data/Naturaliste/Predator_TL.csv")
-  Prey_TL=read.csv("C:/Matias/Data/Naturaliste/Prey_TL.csv")
-  Prey_cnvrsn=read.csv("C:/Matias/Data/Naturaliste/Prey.csv")
+  Diet=read.csv(handl_OneDrive("Data/Naturaliste/Look.at.diet_1.csv"))
+  Predator_TL=read.csv(handl_OneDrive("Data/Naturaliste/Predator_TL.csv"))
+  Prey_TL=read.csv(handl_OneDrive("Data/Naturaliste/Prey_TL.csv"))
+  Prey_cnvrsn=read.csv(handl_OneDrive("Data/Naturaliste/Prey.csv"))
   
 }
 if(User=="Dani")   Diet=read.csv("C:/Users/ddw/Documents/Projects/Naturaliste_longline/Diet/Look.at.diet_1.csv")
@@ -187,7 +189,7 @@ if(Do.survival=="YES")
   
   N.min=5  #minimum number of records per species for PCS analysis
   
-  if(User=="Matias") setwd("C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Survival")
+  if(User=="Matias") setwd(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Survival"))
   if(User=="Dani") setwd("C:/Users/ddw/Documents/Projects/Naturaliste_longline/outputs/Survival")
   
 
@@ -223,8 +225,8 @@ if(Do.survival=="YES")
     text(122,-26,("Australia"),col="black", cex=3)
     points(plt.dat$Mid.Long,plt.dat$Mid.Lat,cex=1.5,
            col=rgb(.2,.2,.2,alpha=0.25),pch=19)
-    mtext("Longitude (°E)",1,-.8,outer=T,cex=2)
-    mtext("Latitude (°S)",2,line=-0.6,outer=T,cex=2)
+    mtext("Longitude (?E)",1,-.8,outer=T,cex=2)
+    mtext("Latitude (?S)",2,line=-0.6,outer=T,cex=2)
     axis(1,seq(112,129,2),seq(112,129,2),cex.axis=1.25)
     axis(2,seq(-13,-36,-2),seq(13,36,2),las=1,cex.axis=1.25)
     dev.off()
@@ -667,7 +669,7 @@ if(Do.rep=="YES"| Do.diet=="YES")
   n.sp=length(these.sp.rep)
   n.vars=length(Reprod.vars)
   
-  if(User=="Matias") setwd("C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Reproduction")
+  if(User=="Matias") setwd(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Reproduction"))
   if(User=="Dani") setwd("whatever")
   
   #see available data by species
@@ -1276,12 +1278,12 @@ if(Do.diet=="YES")
                                    COMMON_NAME,SCIENTIFIC_NAME,year))
   Look.at.diet=subset(Look.at.diet,year==Current.Yr)
   Look.at.diet=Look.at.diet[,-match("year",names(Look.at.diet))]
-  if(User=="Matias") setwd("C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Diet")
+  if(User=="Matias") setwd(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Diet"))
   if(User=="Dani") setwd("whatever")
   write.csv(Look.at.diet,"Look.at.diet_all_sp.csv",row.names=F)
   
-  if(User=="Matias") HNDL.diet="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Diet/"
-  if(User=="Dani") HNDL.diet="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Diet/"
+  if(User=="Matias") HNDL.diet=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Diet/")
+  if(User=="Dani") HNDL.diet="whatever"
   
   Not.prey=c("SHEET_NO","COMMON_NAME","SCIENTIFIC_NAME","SPECIES","SEX","TL","FL","STMCH_FULL","STMCH_CONT")
   Prey=colnames(Diet)[-match(Not.prey,colnames(Diet))]

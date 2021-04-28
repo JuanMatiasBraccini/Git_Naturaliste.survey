@@ -30,8 +30,11 @@
 #Define user
 User="Matias"
 
+if(!exists('handl_OneDrive')) source('C:/Users/myb/OneDrive - Department of Primary Industries and Regional Development/Matias/Analyses/SOURCE_SCRIPTS/Git_other/handl_OneDrive.R')
+
+
 #Sharks data base 
-source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Source_Shark_bio.R")
+source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Source_Shark_bio.R"))
 
 library(lubridate)  #for dates manipulation
 library(geosphere)
@@ -74,16 +77,16 @@ library("countreg")
 
 
 
-source("C:/Matias/R/HighstatLibV6.R")  #for corvif ()
-source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R")
-source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Compare.error.structure.R")  
-source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_Population.dynamics/fn.fig.R")
-source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Smart_par.R")
+source(handl_OneDrive("R/HighstatLibV6.R"))  #for corvif ()
+source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R"))
+source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Compare.error.structure.R"))  
+source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_Population.dynamics/fn.fig.R"))
+source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Smart_par.R"))
 
 
 
 #Get info for tiger sharks tissue samples
-Tiger.gen.samples=read.csv("C:/Matias/Data/Shark_bio/Tiger.gen.samples.csv")
+Tiger.gen.samples=read.csv(handl_OneDrive("Data/Shark_bio/Tiger.gen.samples.csv"))
 Tiger.gen=subset(DATA,BAG_NO%in%Tiger.gen.samples$Bag_NO,select=c(BAG_NO,SPECIES,SHEET_NO,
                                                                   Month,year,BOTDEPTH,Mid.Lat,Mid.Long))
 not.in.list=as.character(Tiger.gen.samples$Bag_NO[which(!Tiger.gen.samples$Bag_NO%in%Tiger.gen$BAG_NO)])
@@ -91,7 +94,7 @@ not.in.list=as.character(Tiger.gen.samples$Bag_NO[which(!Tiger.gen.samples$Bag_N
 
 
 #sampling stations                   
-Fixed.Stations=read.csv("C:/Matias/Data/Fixed station sites.csv")
+Fixed.Stations=read.csv(handl_OneDrive("Data/Fixed station sites.csv"))
 Mid.Point=with(Fixed.Stations,gcIntermediate(cbind(Long.1,Lat.1), cbind(Long.2,Lat.2), n=1, addStartEnd=F))
 Mid.Point=as.data.frame(do.call(rbind,Mid.Point))
 names(Mid.Point)=c("Fix.St.mid.lon","Fix.St.mid.lat")
@@ -102,17 +105,17 @@ West.lon.bound=with(Fixed.Stations,min(c(Long.1,Long.2)))
 East.lon.bound=with(Fixed.Stations,max(c(Long.1,Long.2)))
 
 #Southern Oscillation Index
-SOI=read.csv("C:/Matias/Data/Oceanography/SOI.csv")
+SOI=read.csv(handl_OneDrive("Data/Oceanography/SOI.csv"))
 
 
 
 #Mean Freo sea level
-Freo=read.csv("C:/Matias/Data/Oceanography/Freo_mean_sea_level.csv")
+Freo=read.csv(handl_OneDrive("Data/Oceanography/Freo_mean_sea_level.csv"))
 names(Freo)[c(1,3)]=c("Year","Freo")
 
 #Depth
-Bathymetry_120=read.table("C:/Matias/Data/Mapping/get_data112_120.cgi")
-Bathymetry_138=read.table("C:/Matias/Data/Mapping/get_data120.05_138.cgi") 
+Bathymetry_120=read.table(handl_OneDrive("Data/Mapping/get_data112_120.cgi"))
+Bathymetry_138=read.table(handl_OneDrive("Data/Mapping/get_data120.05_138.cgi")) 
 Bathymetry=rbind(Bathymetry_120,Bathymetry_138)
 
 #Genetic tissue in stock
@@ -120,7 +123,7 @@ Bathymetry=rbind(Bathymetry_120,Bathymetry_138)
 #Gen.tissue=read.xlsx("M:/Fisheries Research/FinFish/Shark/Dani/Samples/Stored samples - STOCKTAKE.xlsx", 1)
 
 #Shapefiles
-PerthIs=read.table("C:/Matias/Data/Mapping/WAislandsPointsNew.txt", header=T) #function for reading txt file
+PerthIs=read.table(handl_OneDrive("Data/Mapping/WAislandsPointsNew.txt"), header=T) #function for reading txt file
 Rottnest.Is=subset(PerthIs,ID%in%c("ROTT1"))
 Garden.Is=subset(PerthIs,ID%in%c("ROTT3"))
 
@@ -184,7 +187,7 @@ fn.check.size.gr=function(SPEC)
   a=subset(DATA,Mid.Lat<=(-26) & SPECIES==SPEC & !is.na(FL))
   a$Method=with(a,ifelse(Method=="LLL","LL",Method))
   
-  fn.fig(paste("C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Size.GN.LL_",SPEC,sep=""),2000,2400)
+  fn.fig(paste(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Size.GN.LL_"),SPEC,sep=""),2000,2400)
   par(mfcol=c(2,1),mai=c(.3,.55,.5,.1),oma=c(3,1.25,2,.1),las=1,mgp=c(.04,.6,0))
   
   with(subset(a,Method=="GN"),hist(FL,main="Gillnet",xlim=c(0,200),ylab="",xlab=""))
@@ -203,7 +206,7 @@ Jeff=DATA%>%filter(!BOAT%in%c("FLIN","HAM","HOU","NAT","RV BREAKSEA","RV Gannet"
                       "Month","TL","Method","BOAT","BLOCK","Mid.Lat","Mid.Long","BOTDEPTH",
                       "MESH_SIZE","MESH_DROP","NET_LENGTH","SOAK.TIME"))
 colnames(Jeff)=tolower(colnames(Jeff))
-write.csv(Jeff,"C:/Matias/Analyses/Catch and effort/Data_Resquests/Jeff N/Scalefish_size.csv",row.names = F)
+write.csv(Jeff,handl_OneDrive("Analyses/Catch and effort/Data_Resquests/Jeff N/Scalefish_size.csv"),row.names = F)
 
 #Depth distribution of sandbar off Perth
 fn.chck.dep.range=function(SP,LAT.RANGE,LONG.RANGE,GEAR,YLIM,XLIM)
@@ -238,7 +241,7 @@ fn.chck.dep.range=function(SP,LAT.RANGE,LONG.RANGE,GEAR,YLIM,XLIM)
 
 # fn.chck.dep.range(SP="TK",LAT.RANGE=c(-33,-31),LONG.RANGE=c(114.5,116),GEAR=c("LL","GN"),
 #                   XLIM=c(114.7,115.7),YLIM=c(-33,-30.99))
-hnd.TK.Perth="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/"
+hnd.TK.Perth=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/")
 fn.fig(paste(hnd.TK.Perth,"Sandbar_off_Perth_LL_survey",sep=''),2400,2400)
 aa=fn.chck.dep.range(SP="TK",LAT.RANGE=c(-33,-31),LONG.RANGE=c(114.5,116),GEAR=c("LL"),
                      XLIM=c(114.7,115.7),YLIM=c(-33,-30.99))
@@ -324,7 +327,7 @@ fn.hamm=function(sP)
   polygon(x=c(113,129,129,113),y=c(-36,-36,-26,-26),col=rgb(.1,.1,.2,alpha=.3))
   mtext(unique(d$COMMON_NAME),3,-2,cex=1.65)
 }
-fn.fig("C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Hammerheads",1400,2400)
+fn.fig(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Hammerheads"),1400,2400)
 par(mfcol=c(3,1),mai=c(.5,.6,.1,.1),las=1,mgp=c(2.5,0.65,0))
 for(i in 1:length(hammers)) fn.hamm(sP=hammers[i])
 mtext("Latitude",2,-2,outer=T,cex=1.65,las=3)
@@ -591,7 +594,7 @@ DATA$FixedStation=with(DATA,ifelse(date%in%Fixed.only,"YES",FixedStation))
 DATA$FixedStation=with(DATA,ifelse(!Station.no.%in%as.character(1:20),"NO",FixedStation))
 
 
-setwd('C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Abundance')
+setwd(handl_OneDrive('Analyses/Surveys/Naturaliste_longline/outputs/Abundance'))
 
 #see what records were set to fixed stations
 hndl.expl=paste(getwd(),"Exploratory",sep="/")
@@ -1102,7 +1105,7 @@ if(Do.abundance=="YES")
   
   
   #Mean All stations Vs Fixed stations
-  hndLs="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Abundance/"
+  hndLs=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance/")
   
   if(explore.cpue=="YES")
   {
@@ -3775,7 +3778,7 @@ if(Do.abundance=="YES")
     #mtext("                         Fitted values",1,outer=F,line=1.5,cex=M)
     
   }
-  hndl.fit.size="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Size/"
+  hndl.fit.size=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Size/")
   fn.fig(paste(hndl.fit.size,"fit.diagnostics",sep=""),1600,2400)
   par(mfrow=c(8,3),mar=c(2,2,1.5,1),oma=c(1,1.5,.1,2),mgp=c(2,.7,0))
   for(i in 1:N.species.size)
@@ -3800,7 +3803,7 @@ if(Do.abundance=="YES")
 # 2. Multivariate analysis and Ecosystem indicators   MISSING:  USE Fixed Stations only! ----------------------------------------------------------------------
 if(Do.multivariate=="YES")
 {
-  hndl.eco="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Ecosystems/"
+  hndl.eco=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Ecosystems/")
   
   DATA.eco=subset(DATA,Month%in%These.Months & Taxa=="Elasmobranch" & BOTDEPTH<500 & FixedStation=="YES" )
   DATA.eco$SPECIES=as.factor(DATA.eco$SPECIES)
@@ -3892,7 +3895,7 @@ if(Do.multivariate=="YES")
   #         should have blocks rathen than lat? if so, then depth nested in block?
   if(Do.multivariate=="YES")   
   {
-    source("C:/Matias/Analyses/SOURCE_SCRIPTS/Multivariate_statistics.R")
+    source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Multivariate_statistics.R"))
     DataSets=c("catch","cpue","proportion")   #response variables
     IDVAR=c("year","BOTDEPTH.mean","Mid.Lat.mean","Effort.statn_year")
     STore.multi.var.trad=Multivar.fn(DATA=Numbers.Station.year,ResVar=ResVar,MultiVar=MultiVar,
@@ -3992,10 +3995,10 @@ if(Do.multivariate=="YES")
     require(asbio)
     
     #Function for calculating Diversity indices and Ecosystem indicators
-    source("C:/Matias/Analyses/Ecosystem indices/Shark-bycatch/Git_bycatch_TDGDLF/Ecosystem_functions.R")
+    source(handl_OneDrive("Analyses/Ecosystem indices/Shark-bycatch/Git_bycatch_TDGDLF/Ecosystem_functions.R"))
     
     #add trophic level
-    TL=read.csv("C:/Matias/Analyses/Ecosystem indices/Shark-bycatch/SPECIES+PCS+FATE.csv",stringsAsFactors=F)
+    TL=read.csv(handl_OneDrive("Analyses/Ecosystem indices/Shark-bycatch/SPECIES+PCS+FATE.csv"),stringsAsFactors=F)
     DATA.eco=merge(DATA.eco,subset(TL,select=c(SPECIES,TROPHIC_LEVEL)),by="SPECIES",all.x=T)
     
     #balance desing
@@ -4395,7 +4398,7 @@ if(Do.multivariate=="YES")
 # REPORT_CATCH RATES FROM FISHERY INDEPENDENT SURVEYS----------------------------------------------------------------------
 if(Do.abundance=="YES")
 {
-  setwd("C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Abundance")
+  setwd(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance"))
   
   
   #Table 1
@@ -4665,11 +4668,11 @@ if(Do.abundance=="YES")
   {
     #North West WA
     library(rgdal)
-    source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R")
+    source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R"))
     
-    JA_Northern_Shark=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/JA_Northern_Shark.shp", layer="JA_Northern_Shark") 
-    WA_Northern_Shark=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/NorthCoastShark_s43.shp", layer="NorthCoastShark_s43") 
-    WA_Northern_Shark_2=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/NorthWestCoastShark_s43.shp", layer="NorthWestCoastShark_s43") 
+    JA_Northern_Shark=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/JA_Northern_Shark.shp"), layer="JA_Northern_Shark") 
+    WA_Northern_Shark=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/NorthCoastShark_s43.shp"), layer="NorthCoastShark_s43") 
+    WA_Northern_Shark_2=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/NorthWestCoastShark_s43.shp"), layer="NorthWestCoastShark_s43") 
     #Shark.zones=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/FisheriesGuide_ConsolidatedNoticesandOrdersDPIRD_061.shp", layer="FisheriesGuide_ConsolidatedNoticesandOrdersDPIRD_061") 
     #Exception.zones <- readOGR("C:/Matias/Data/Mapping/Shark_shape_files/FisheriesGuide_InstrumentofExemptionDPIRD_051.shp", layer="FisheriesGuide_InstrumentofExemptionDPIRD_051")
     
@@ -4765,11 +4768,11 @@ if(Do.abundance=="YES")
   {
     #North West WA
     library(rgdal)
-    source("C:/Matias/Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R")
+    source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R"))
     
-    JA_Northern_Shark=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/JA_Northern_Shark.shp", layer="JA_Northern_Shark") 
-    WA_Northern_Shark=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/NorthCoastShark_s43.shp", layer="NorthCoastShark_s43") 
-    WA_Northern_Shark_2=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/NorthWestCoastShark_s43.shp", layer="NorthWestCoastShark_s43") 
+    JA_Northern_Shark=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/JA_Northern_Shark.shp"), layer="JA_Northern_Shark") 
+    WA_Northern_Shark=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/NorthCoastShark_s43.shp"), layer="NorthCoastShark_s43") 
+    WA_Northern_Shark_2=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/NorthWestCoastShark_s43.shp"), layer="NorthWestCoastShark_s43") 
     
     
     SCALER=3
@@ -5029,7 +5032,7 @@ if(Do.abundance=="YES")
   
   #5. Export Sandbar and Dusky sharks index   
       #Fixed stations
-  hnd.indx="C:/Matias/Analyses/Data_outs/"
+  hnd.indx=handl_OneDrive("Analyses/Data_outs/")
   for(i in 1:length(INDEX)) write.csv(INDEX[[i]],paste(hnd.indx,names(INDEX)[i],'/',names(INDEX)[i],".Srvy.FixSt.csv",sep=""),row.names=F)
   
   
@@ -5298,7 +5301,7 @@ if(Do.ecosystems=="YES")
 {
   if(do.glm.ecos=="YES")    
   {
-    setwd("C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Ecosystems")
+    setwd(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Ecosystems"))
     
     #explore model fit
     fn.fig("Model.fits",2000,2400)
@@ -5476,7 +5479,7 @@ if(Do.ecosystems=="YES")
 # REPORT_MULTIVARIATE ANALYSIS OF CATCH COMPOSITION FROM FISHERY INDEPENDENT SURVEYS----------------------------------------------------------------------
 if(Do.multivariate=="YES")
 {
-  Hndl="C:/Matias/Analyses/Surveys/Naturaliste_longline/outputs/Multivariate/"
+  Hndl=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Multivariate/")
   for(s in 1:length(STore.multi.var.trad)) 
   {
     with(STore.multi.var.trad[[s]],
