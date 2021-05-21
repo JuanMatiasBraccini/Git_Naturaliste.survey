@@ -179,6 +179,160 @@ Max.depth=3  #(in metres)
 
 
 
+# Output scalefish size data for Jef Norris -------------------------------------------------------
+do.Jeff=FALSE
+if(do.Jeff)
+{
+  Jeff=DATA%>%filter(!BOAT%in%c("FLIN","HAM","HOU","NAT","RV BREAKSEA","RV Gannet","RV GANNET","RV SNIPE 2") &
+                       Mid.Lat<=(-31) & Mid.Long>115.5 & Method=="GN" & !is.na(TL) & 
+                       SPECIES%in%c("PS.T","QS.T","RS.T","BG.T"))%>%
+    dplyr::select(c("SPECIES","SCIENTIFIC_NAME","COMMON_NAME","TYPE","SHEET_NO","date","year",
+                    "Month","TL","Method","BOAT","BLOCK","Mid.Lat","Mid.Long","BOTDEPTH",
+                    "MESH_SIZE","MESH_DROP","NET_LENGTH","SOAK.TIME"))
+  colnames(Jeff)=tolower(colnames(Jeff))
+  write.csv(Jeff,handl_OneDrive("Analyses/Catch and effort/Data_Resquests/Jeff N/Scalefish_size.csv"),row.names = F)
+  
+}
+
+# Depth distribution of sandbar off Perth -------------------------------------------------------
+do.sandbar.perth=FALSE
+if(do.sandbar.perth)
+{
+  fn.chck.dep.range=function(SP,LAT.RANGE,LONG.RANGE,GEAR,YLIM,XLIM)
+  {
+    a=subset(DATA,SPECIES==SP & Mid.Lat>=LAT.RANGE[1] & Mid.Lat<=LAT.RANGE[2] &Method%in%GEAR)
+    Bath=subset(Bathymetry,V2>=LAT.RANGE[1] & V2<=LAT.RANGE[2] & V1>=LONG.RANGE[1] & V1<=LONG.RANGE[2] )
+    Bath=Bath[order(Bath$V1,Bath$V2),]
+    xbat=sort(unique(Bath$V1))
+    ybat=sort(unique(Bath$V2))
+    reshaped=as.matrix(reshape(Bath,idvar="V1",timevar="V2",v.names="V3", direction="wide"))
+    
+    smoothScatter(a[,match(c("Mid.Long","Mid.Lat"),names(a))], nrpoints = 0,ylab="Lat",xlab="Long",
+                  ylim=YLIM,xlim=XLIM,cex.axis=1.25,cex.lab=1.9)
+    points(a$Mid.Long,a$Mid.Lat,cex=1.25,col="white")
+    contour(xbat, ybat, reshaped[,2:ncol(reshaped)],ylim=Ylim,xlim=Xlim, zlim=c(-1,-300),
+            nlevels = 3,labcex=2,lty = c(1,2,3,4),col=1,add=T)
+    legend("topright",paste("Species=",SP),bty="n",cex=1.5)
+    legend("topleft",c(paste("Number of shots=",length(unique(a$SHEET_NO))),
+                       paste("Number of sharks=",nrow(a))),bty="n",cex=1.5)
+    polygon(x=Rottnest.Is$Longitude,y=Rottnest.Is$Latitude,col="dark grey")  #add missing islands
+    polygon(x=Garden.Is$Longitude,y=Garden.Is$Latitude,col="dark grey")
+    
+    #add location of best shots
+    a$Mid.Lat_Mid.Long=with(a,paste(Mid.Lat,Mid.Long))
+    TABL=table(a$Mid.Lat_Mid.Long)
+    best=subset(a,Mid.Lat_Mid.Long%in%names(TABL[which(TABL>4)]))
+    best.agg=aggregate(Number~Mid.Long+Mid.Lat,best,sum)
+    with(best.agg,points(Mid.Long,Mid.Lat,cex=Number/2,col=2))
+    legend("bottomright","highest catches",col=2,pch=1,cex=2,bty="n")
+    return(best.agg)
+  }
+  
+  # fn.chck.dep.range(SP="TK",LAT.RANGE=c(-33,-31),LONG.RANGE=c(114.5,116),GEAR=c("LL","GN"),
+  #                   XLIM=c(114.7,115.7),YLIM=c(-33,-30.99))
+  hnd.TK.Perth=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/")
+  fn.fig(paste(hnd.TK.Perth,"Sandbar_off_Perth_LL_survey",sep=''),2400,2400)
+  aa=fn.chck.dep.range(SP="TK",LAT.RANGE=c(-33,-31),LONG.RANGE=c(114.5,116),GEAR=c("LL"),
+                       XLIM=c(114.7,115.7),YLIM=c(-33,-30.99))
+  dev.off()
+  write.csv(aa,paste(hnd.TK.Perth,"Sandbar_off_Perth_LL_survey.csv",sep=''),row.names=F)
+  
+  fun.dummy=function(YLIM,XLIM,scaler)
+  {
+    a=subset(DATA,SPECIES=="TK" &Method%in%"LL")
+    Last.trip=subset(DATA,year==2016&Method%in%"LL"&BOAT%in%"NAT")
+    Last.trip=Last.trip[!duplicated(Last.trip$SHEET_NO),]
+    
+    KTCH=aggregate(Number~SHEET_NO+Mid.Long+Mid.Lat,a,sum)
+    EFF=aggregate(cbind(SOAK.TIME,N.hooks)~SHEET_NO,a,max,na.rm=T)
+    KTCH.EFF=merge(KTCH,EFF,by="SHEET_NO")
+    KTCH.EFF$CPUE=with(KTCH.EFF,Number/(SOAK.TIME* N.hooks))
+    KTCH.EFF=subset(KTCH.EFF,!CPUE=="Inf")
+    
+    
+    plotMap(worldLLhigh, ylim=YLIM,xlim=XLIM,
+            plt = c(.1, 1, 0.075, 1),
+            col="grey80",tck = 0.025, 
+            tckMinor = 0.0125, xlab="",ylab="",axes=F)
+    box()
+    with(KTCH.EFF,points(Mid.Long,Mid.Lat,cex=CPUE*scaler,col="grey30"))
+    with(Fixed.Stations[1:20,],points(Fix.St.mid.lon,Fix.St.mid.lat,
+                                      pch=19,col=2,cex=1.25))
+    
+    points(113.661,-24.884,cex=1.25,pch=17,col=3)
+    text(113.661,-24.884,"Carnarvon",pos=4)
+    points(114.162,-27.720,cex=1.25,pch=17,col=3)
+    text(114.162,-27.720,"Kalbarri",pos=4)
+    points(122.2359,-17.9614,cex=1.25,pch=17,col=3)
+    text(122.3,-18.2,"Broome",pos=2, srt=90)
+    points(115.86,-31.95,cex=1.25,pch=17,col=3)
+    text(115.86,-31.95,"Perth",pos=4)
+    
+    #Add last years shots
+    points(Last.trip$Mid.Long,Last.trip$Mid.Lat,col="blue",pch=19)
+    legend("bottomright",c("Fixed stations","2016 trip"),
+           pch=c(19,19),col=c("red","blue"),bty="n")
+    
+    with(Fixed.Stations[1:20,],text(Fix.St.mid.lon,Fix.St.mid.lat,Station.no.,
+                                    pos=3,cex=1.1,col="firebrick"))
+    if(YLIM[1]<(-29) & YLIM[2] <(-25))
+    {
+      s=subset(KTCH.EFF,Mid.Lat>=YLIM[1] & Mid.Lat<=YLIM[2],
+               select=c(Mid.Long,Mid.Lat,CPUE))
+      s$CPUE=round(s$CPUE,4)
+      s=s[order(-s$CPUE),]
+      return(s)
+    }
+  }
+  fn.fig(paste(hnd.TK.Perth,"Sandbar_cpue",sep=''),2400,2400)
+  fun.dummy(YLIM=c(-34.5,-15.5),XLIM=c(112.25,123.25),scaler=20)
+  dev.off()
+  
+  fn.fig(paste(hnd.TK.Perth,"Sandbar_cpue_Kalbarri",sep=''),2400,2400)
+  aa=fun.dummy(YLIM=c(-30.5,-26),XLIM=c(112.25,115.9),scaler=100)
+  dev.off()
+  write.csv(aa,paste(hnd.TK.Perth,"Sandbar_cpue_Kalbarri.csv",sep=''),row.names=F)
+  
+  fn.fig(paste(hnd.TK.Perth,"Sandbar_cpue_First_leg",sep=''),2400,2400)
+  fun.dummy(YLIM=c(-26.5,-19),XLIM=c(112.25,116.85),scaler=20)
+  dev.off()
+  
+}
+
+
+# Spatial plot of Hammerheads for species listing issue -------------------------------------------------------
+do.ham.spatial=FALSE
+if(do.ham.spatial)
+{
+  hammers=c("HZ","HS","HG")
+  Hamm=subset(DATA,SPECIES%in%hammers)
+  Hamm$COMMON_NAME=as.character(Hamm$COMMON_NAME)
+  Hamm$COMMON_NAME=with(Hamm,ifelse(COMMON_NAME=="HAMMERHEAD (GREAT)","Great Hammerhead",COMMON_NAME))
+  
+  #display spatially
+  fn.hamm=function(sP)
+  {
+    d=subset(Hamm,SPECIES==sP)
+    plot(d$Mid.Long,d$Mid.Lat,main="",ylim=c(-36,-12),xlim=c(113.5,128.5),ylab="",
+         xlab="",cex.axis=1.5)
+    polygon(x=c(113,129,129,113),y=c(-36,-36,-26,-26),col=rgb(.1,.1,.2,alpha=.3))
+    mtext(unique(d$COMMON_NAME),3,-2,cex=1.65)
+  }
+  fn.fig(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Hammerheads"),1400,2400)
+  par(mfcol=c(3,1),mai=c(.5,.6,.1,.1),las=1,mgp=c(2.5,0.65,0))
+  for(i in 1:length(hammers)) fn.hamm(sP=hammers[i])
+  mtext("Latitude",2,-2,outer=T,cex=1.65,las=3)
+  mtext("Longitude",1,-1.5,outer=T,cex=1.65)
+  dev.off()
+  
+  #Prop by species north (for Catch-MSY)
+  Hamm.North=subset(Hamm,Mid.Lat>(-26))
+  Tab.hh.sp=table(Hamm.North$COMMON_NAME)
+  Tab.hh.sp=round(Tab.hh.sp/sum(Tab.hh.sp),2)
+  
+}
+
+
 # PROCEDURE SECTION -------------------------------------------------------
 
 #Check size distribution by gear
@@ -198,147 +352,7 @@ fn.check.size.gr=function(SPEC)
 fn.check.size.gr(SPEC='GM')
 fn.check.size.gr(SPEC='WH')
 
-#Output scalefish size data for Jef Norris
-Jeff=DATA%>%filter(!BOAT%in%c("FLIN","HAM","HOU","NAT","RV BREAKSEA","RV Gannet","RV GANNET","RV SNIPE 2") &
-                     Mid.Lat<=(-31) & Mid.Long>115.5 & Method=="GN" & !is.na(TL) & 
-                     SPECIES%in%c("PS.T","QS.T","RS.T","BG.T"))%>%
-            select(c("SPECIES","SCIENTIFIC_NAME","COMMON_NAME","TYPE","SHEET_NO","date","year",
-                      "Month","TL","Method","BOAT","BLOCK","Mid.Lat","Mid.Long","BOTDEPTH",
-                      "MESH_SIZE","MESH_DROP","NET_LENGTH","SOAK.TIME"))
-colnames(Jeff)=tolower(colnames(Jeff))
-write.csv(Jeff,handl_OneDrive("Analyses/Catch and effort/Data_Resquests/Jeff N/Scalefish_size.csv"),row.names = F)
-
-#Depth distribution of sandbar off Perth
-fn.chck.dep.range=function(SP,LAT.RANGE,LONG.RANGE,GEAR,YLIM,XLIM)
-{
-  a=subset(DATA,SPECIES==SP & Mid.Lat>=LAT.RANGE[1] & Mid.Lat<=LAT.RANGE[2] &Method%in%GEAR)
-  Bath=subset(Bathymetry,V2>=LAT.RANGE[1] & V2<=LAT.RANGE[2] & V1>=LONG.RANGE[1] & V1<=LONG.RANGE[2] )
-  Bath=Bath[order(Bath$V1,Bath$V2),]
-  xbat=sort(unique(Bath$V1))
-  ybat=sort(unique(Bath$V2))
-  reshaped=as.matrix(reshape(Bath,idvar="V1",timevar="V2",v.names="V3", direction="wide"))
-  
-  smoothScatter(a[,match(c("Mid.Long","Mid.Lat"),names(a))], nrpoints = 0,ylab="Lat",xlab="Long",
-                ylim=YLIM,xlim=XLIM,cex.axis=1.25,cex.lab=1.9)
-  points(a$Mid.Long,a$Mid.Lat,cex=1.25,col="white")
-  contour(xbat, ybat, reshaped[,2:ncol(reshaped)],ylim=Ylim,xlim=Xlim, zlim=c(-1,-300),
-          nlevels = 3,labcex=2,lty = c(1,2,3,4),col=1,add=T)
-  legend("topright",paste("Species=",SP),bty="n",cex=1.5)
-  legend("topleft",c(paste("Number of shots=",length(unique(a$SHEET_NO))),
-                     paste("Number of sharks=",nrow(a))),bty="n",cex=1.5)
-  polygon(x=Rottnest.Is$Longitude,y=Rottnest.Is$Latitude,col="dark grey")  #add missing islands
-  polygon(x=Garden.Is$Longitude,y=Garden.Is$Latitude,col="dark grey")
-  
-  #add location of best shots
-  a$Mid.Lat_Mid.Long=with(a,paste(Mid.Lat,Mid.Long))
-  TABL=table(a$Mid.Lat_Mid.Long)
-  best=subset(a,Mid.Lat_Mid.Long%in%names(TABL[which(TABL>4)]))
-  best.agg=aggregate(Number~Mid.Long+Mid.Lat,best,sum)
-  with(best.agg,points(Mid.Long,Mid.Lat,cex=Number/2,col=2))
-  legend("bottomright","highest catches",col=2,pch=1,cex=2,bty="n")
-  return(best.agg)
-}
-
-# fn.chck.dep.range(SP="TK",LAT.RANGE=c(-33,-31),LONG.RANGE=c(114.5,116),GEAR=c("LL","GN"),
-#                   XLIM=c(114.7,115.7),YLIM=c(-33,-30.99))
-hnd.TK.Perth=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/")
-fn.fig(paste(hnd.TK.Perth,"Sandbar_off_Perth_LL_survey",sep=''),2400,2400)
-aa=fn.chck.dep.range(SP="TK",LAT.RANGE=c(-33,-31),LONG.RANGE=c(114.5,116),GEAR=c("LL"),
-                     XLIM=c(114.7,115.7),YLIM=c(-33,-30.99))
-dev.off()
-write.csv(aa,paste(hnd.TK.Perth,"Sandbar_off_Perth_LL_survey.csv",sep=''),row.names=F)
-
-
-fun.dummy=function(YLIM,XLIM,scaler)
-{
-  a=subset(DATA,SPECIES=="TK" &Method%in%"LL")
-  Last.trip=subset(DATA,year==2016&Method%in%"LL"&BOAT%in%"NAT")
-  Last.trip=Last.trip[!duplicated(Last.trip$SHEET_NO),]
-  
-  KTCH=aggregate(Number~SHEET_NO+Mid.Long+Mid.Lat,a,sum)
-  EFF=aggregate(cbind(SOAK.TIME,N.hooks)~SHEET_NO,a,max,na.rm=T)
-  KTCH.EFF=merge(KTCH,EFF,by="SHEET_NO")
-  KTCH.EFF$CPUE=with(KTCH.EFF,Number/(SOAK.TIME* N.hooks))
-  KTCH.EFF=subset(KTCH.EFF,!CPUE=="Inf")
-  
-  
-  plotMap(worldLLhigh, ylim=YLIM,xlim=XLIM,
-          plt = c(.1, 1, 0.075, 1),
-          col="grey80",tck = 0.025, 
-          tckMinor = 0.0125, xlab="",ylab="",axes=F)
-  box()
-  with(KTCH.EFF,points(Mid.Long,Mid.Lat,cex=CPUE*scaler,col="grey30"))
-  with(Fixed.Stations[1:20,],points(Fix.St.mid.lon,Fix.St.mid.lat,
-                                    pch=19,col=2,cex=1.25))
-  
-  points(113.661,-24.884,cex=1.25,pch=17,col=3)
-  text(113.661,-24.884,"Carnarvon",pos=4)
-  points(114.162,-27.720,cex=1.25,pch=17,col=3)
-  text(114.162,-27.720,"Kalbarri",pos=4)
-  points(122.2359,-17.9614,cex=1.25,pch=17,col=3)
-  text(122.3,-18.2,"Broome",pos=2, srt=90)
-  points(115.86,-31.95,cex=1.25,pch=17,col=3)
-  text(115.86,-31.95,"Perth",pos=4)
-  
-  #Add last years shots
-  points(Last.trip$Mid.Long,Last.trip$Mid.Lat,col="blue",pch=19)
-  legend("bottomright",c("Fixed stations","2016 trip"),
-         pch=c(19,19),col=c("red","blue"),bty="n")
-  
-  with(Fixed.Stations[1:20,],text(Fix.St.mid.lon,Fix.St.mid.lat,Station.no.,
-                                  pos=3,cex=1.1,col="firebrick"))
-  if(YLIM[1]<(-29) & YLIM[2] <(-25))
-  {
-    s=subset(KTCH.EFF,Mid.Lat>=YLIM[1] & Mid.Lat<=YLIM[2],
-             select=c(Mid.Long,Mid.Lat,CPUE))
-    s$CPUE=round(s$CPUE,4)
-    s=s[order(-s$CPUE),]
-    return(s)
-  }
-}
-fn.fig(paste(hnd.TK.Perth,"Sandbar_cpue",sep=''),2400,2400)
-fun.dummy(YLIM=c(-34.5,-15.5),XLIM=c(112.25,123.25),scaler=20)
-dev.off()
-
-fn.fig(paste(hnd.TK.Perth,"Sandbar_cpue_Kalbarri",sep=''),2400,2400)
-aa=fun.dummy(YLIM=c(-30.5,-26),XLIM=c(112.25,115.9),scaler=100)
-dev.off()
-write.csv(aa,paste(hnd.TK.Perth,"Sandbar_cpue_Kalbarri.csv",sep=''),row.names=F)
-
-fn.fig(paste(hnd.TK.Perth,"Sandbar_cpue_First_leg",sep=''),2400,2400)
-fun.dummy(YLIM=c(-26.5,-19),XLIM=c(112.25,116.85),scaler=20)
-dev.off()
-
-
-
-#Spatial plot of Hammerheads for species listing issue
-
-hammers=c("HZ","HS","HG")
-Hamm=subset(DATA,SPECIES%in%hammers)
-Hamm$COMMON_NAME=as.character(Hamm$COMMON_NAME)
-Hamm$COMMON_NAME=with(Hamm,ifelse(COMMON_NAME=="HAMMERHEAD (GREAT)","Great Hammerhead",COMMON_NAME))
-
-#display spatially
-fn.hamm=function(sP)
-{
-  d=subset(Hamm,SPECIES==sP)
-  plot(d$Mid.Long,d$Mid.Lat,main="",ylim=c(-36,-12),xlim=c(113.5,128.5),ylab="",
-       xlab="",cex.axis=1.5)
-  polygon(x=c(113,129,129,113),y=c(-36,-36,-26,-26),col=rgb(.1,.1,.2,alpha=.3))
-  mtext(unique(d$COMMON_NAME),3,-2,cex=1.65)
-}
-fn.fig(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Hammerheads"),1400,2400)
-par(mfcol=c(3,1),mai=c(.5,.6,.1,.1),las=1,mgp=c(2.5,0.65,0))
-for(i in 1:length(hammers)) fn.hamm(sP=hammers[i])
-mtext("Latitude",2,-2,outer=T,cex=1.65,las=3)
-mtext("Longitude",1,-1.5,outer=T,cex=1.65)
-dev.off()
-
-
-#Prop by species north (for Catch-MSY)
-Hamm.North=subset(Hamm,Mid.Lat>(-26))
-Tab.hh.sp=table(Hamm.North$COMMON_NAME)
-Tab.hh.sp=round(Tab.hh.sp/sum(Tab.hh.sp),2)
+#ACA
 
 #drop unnecessary variables
 drop=c("MESH_SIZE","MESH_DROP","NET_LENGTH")
@@ -1405,7 +1419,7 @@ if(Do.abundance=="YES")
     fn.expl.non.linear=function(d,VARS,NamE)
     {
       d=d %>% filter(BOTDEPTH<210 & FixedStation=="YES" & Catch.Target>0 ) %>%
-        select(VARS) %>%
+        dplyr::select(VARS) %>%
         mutate(Mid.Lat=abs(Mid.Lat),
                log.Ef=log(SOAK.TIME*N.hooks.Fixed),
                year=factor(year,levels=unique(sort(year))))
