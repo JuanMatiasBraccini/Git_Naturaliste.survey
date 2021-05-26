@@ -84,6 +84,8 @@ source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_Population.dynamics/fn.fig.R"
 source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Smart_par.R"))
 
 
+#Species names
+SPECIES.names=read.csv(handl_OneDrive("Data/Species.code.csv"))
 
 #Get info for tiger sharks tissue samples
 Tiger.gen.samples=read.csv(handl_OneDrive("Data/Shark_bio/Tiger.gen.samples.csv"))
@@ -352,7 +354,6 @@ fn.check.size.gr=function(SPEC)
 fn.check.size.gr(SPEC='GM')
 fn.check.size.gr(SPEC='WH')
 
-#ACA
 
 #drop unnecessary variables
 drop=c("MESH_SIZE","MESH_DROP","NET_LENGTH")
@@ -385,7 +386,7 @@ DATA=subset(DATA,!SPECIES%in%c("XX","XX.T"))
 #dropline data base
 DATA.DL=subset(DATA, Method=="DL" & year<2001)   
 
-#longline data base
+#longline data base (only longline deployments on the RV Naturaliste)
 DATA=subset(DATA,Method=="LL")   
 
 Yrs.DL=sort(unique(DATA.DL$year))
@@ -485,7 +486,7 @@ Table.1.DL=merge(DL.species$Table.species,DL.size,by="SPECIES")
 names(Table.1.DL)[-ID]=paste("DL.",names(Table.1.DL)[-ID],sep="")
 
 Table.1=merge(Table.1.LL,Table.1.DL,by="SPECIES",all=T)
-Table.1=merge(SPECIES.names,Table.1,by.x="Species",by.y="SPECIES",all.y=T)
+Table.1=merge(SPECIES.names,Table.1,by.x="Species",by.y="SPECIES",all.y=T) #ACA
 Table.1=Table.1[order(Table.1$LL.Cum.Percent,-Table.1$LL.Numbers),]
 Table.1[is.na(Table.1)]=""
 names(Table.1)[match("LL.Numbers",names(Table.1))]=paste("LL.Numbers_",Yrs.LL[1],"-",Yrs.LL[length(Yrs.LL)],sep="")
@@ -494,7 +495,7 @@ names(Table.1)[match("DL.Numbers",names(Table.1))]=paste("DL.Numbers_",Yrs.DL[1]
 Req.shrk=vapply(strsplit(Table.1$SCIENTIFIC_NAME, " ", fixed = TRUE), "[", "", 1)
 Req.shrk=c(Table.1$Species[which(Req.shrk=="Carcharhinus")],"MI","TG","SE","LE","TA","GB")
 Prop.requiem.sharks=Table.1%>%mutate(Requiem=ifelse(Species%in%Req.shrk,"YES","NO")) %>%
-                              rename(N='LL.Numbers_2001-2017')%>%
+                              rename(N=paste('LL.Numbers',paste(Yrs.LL[1],Yrs.LL[length(Yrs.LL)],sep='-'),sep='_'))%>%
                               group_by(Requiem) %>%
                               summarise(N = sum(N)) %>%
                               mutate(prop=N/sum(N)) %>%
@@ -1200,6 +1201,35 @@ if(Do.abundance=="YES")
     d=d[order(d$year),]
     return(d)
   }
+  fn.nmnl.size=function(dat,REL)
+  {
+    d = dat %>%
+      mutate(year=as.numeric(as.character(year)))%>%
+      group_by(year) %>%
+      summarise(n = length(FL),
+                mean = mean(FL),
+                sd = sd(FL),
+                se = sd/(sqrt(n)),
+                lowCL= mean-1.96*se,
+                uppCL= mean+1.96*se) %>%
+      as.data.frame
+    
+    if(REL=="YES")
+    {
+      Mn=mean(d$mean,na.rm=T)
+      d$mean=d$mean/Mn
+      d$low95=d$lowCL/Mn
+      d$up95=d$uppCL/Mn
+    }
+    all.yrs=seq(YEAR[1],d$year[length(d$year)])
+    msn.yr=all.yrs[which(!all.yrs%in%d$year)]  
+    msn.yr.dummy=d[1:length(msn.yr),]
+    msn.yr.dummy[,]=NA
+    msn.yr.dummy$year=msn.yr
+    d=rbind(d,msn.yr.dummy)
+    d=d[order(d$year),]
+    return(d)
+  }
   
   #1.11.1. Exploratory analysis 
   if(explore.cpue=="YES")
@@ -1633,7 +1663,7 @@ if(Do.abundance=="YES")
     names(Select.error)=names(DATA.list)
     stopCluster(cl) 
     
-    #output pdf  #ACA
+    #output pdf  
     CL=c("grey50","grey80","blue","cornflowerblue")
     fn.pred=function(term,DAT,MOD,Nml)
     {
@@ -4414,605 +4444,810 @@ if(Do.abundance=="YES")
 {
   setwd(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance"))
   
+  do.paper=FALSE
   
-  #Table 1
-  write.csv(Table.1,"Paper/Table.1.csv",row.names=F)   
-  write.csv(Table.1.scalies,"Paper/Table.1.scalies.csv",row.names=F)
-  
-  
-  #Word cloud of shark species  
-  library(tm)    #text mining
-  library(SnowballC)
-  library(wordcloud)
-  #Longline
-  fn.fig("Paper/Species cloud_longline",2400,2400)
-  a=subset(Table.1,!is.na('LL.Numbers_2001-2017'))
-  wordcloud(a$COMMON_NAME,a$'LL.Numbers_2001-2017',min.freq=1,
-            scale=c(6,1),
-            colors="black")
-  #colors=rev(gray.colors(30, start = 0.1, end = 0.6, gamma = 2.2)))
-  #colors=brewer.pal(12, "Paired"))
-  dev.off()
-
-  #dropline
-  fn.fig("Paper/Species cloud_dropline",2400,2400)
-  a=Table.1
-  names(a)[match('DL.Numbers_1994-2000',names(a))]='dummy'
-  a$dummy=as.numeric(a$dummy)
-  a=subset(a,!is.na(dummy))
-  wordcloud(a$COMMON_NAME,a$dummy,min.freq=1,
-            scale=c(2,1),
-            colors="black")
-  dev.off()
-  
-  
-  fn.fig("Paper/Species cloud",2400,2400)
-  par(mfrow=c(2,1),mar=c(.1,.1,.1,.1),oma=c(.1,.1,.1,.1))
-  #dropline
-  a=Table.1
-  names(a)[match('DL.Numbers_1994-2000',names(a))]='dummy'
-  a$dummy=as.numeric(a$dummy)
-  a=subset(a,!is.na(dummy))
-  wordcloud(a$COMMON_NAME,a$dummy,min.freq=1,
-            scale=c(3,.7),
-            colors="black")
-  legend('topleft',"Dropline",bty='n')
-  #longline
-  a=subset(Table.1,!is.na('LL.Numbers_2001-2017'))
-  wordcloud(a$COMMON_NAME,a$'LL.Numbers_2001-2017',min.freq=1,
-            scale=c(3,.7),
-            colors="black")
-  legend('topleft',"Longline",bty='n')
-  #colors=rev(gray.colors(30, start = 0.1, end = 0.6, gamma = 2.2)))
-  #colors=brewer.pal(12, "Paired"))
-  dev.off()
-  
-
-  #stacked area plot of top shark species by time
-  n=10
-  fn.stack.area=function(tops,DAT,NME)
+  if(do.paper)
   {
-    topS=names(tops[1:n])
-    not.topS=names(tops[n+1:length(tops)])
-    a=subset(DAT,TYPE=="Elasmo" & !SPECIES%in%not.topS)
-    a$SPECIES=factor(a$SPECIES,levels=topS)
-    d.stacked.plot=aggregate(Number~SPECIES+year,a,sum)
-    d.stacked.plot=reshape(d.stacked.plot,v.names = "Number", idvar = "year",
-                           timevar = "SPECIES", direction = "wide")
-    d.stacked.plot[is.na(d.stacked.plot)]=0
-    CL=(rainbow(nrow(d.stacked.plot),start=0.45,end=0.9,alpha=0.95))
+    #Table 1
+    write.csv(Table.1,"Paper/Table.1.csv",row.names=F)   
+    write.csv(Table.1.scalies,"Paper/Table.1.scalies.csv",row.names=F)
     
-    fn.fig(NME,2400,2400)
-    par(mai=c(.8,.8,.5,.5),xpd=TRUE,mgp=c(2.5,.8,0),las=1)
-    stackpoly(d.stacked.plot[,2:ncol(d.stacked.plot)],stack=T,xaxlab=d.stacked.plot$year,
-              col=CL,border=1,ylab="Number of sharks",xlab="Year",cex.lab=2.25,cex.axis=1.35)
-    legend("top",substr(names(d.stacked.plot)[2:ncol(d.stacked.plot)],8,9),bty='n',fill=CL,
-           horiz=T,inset=c(0,-0.05),cex=1.125)
+    
+    #Word cloud of shark species  
+    library(tm)    #text mining
+    library(SnowballC)
+    library(wordcloud)
+    #Longline
+    fn.fig("Paper/Species cloud_longline",2400,2400)
+    a=subset(Table.1,!is.na('LL.Numbers_2001-2017'))
+    wordcloud(a$COMMON_NAME,a$'LL.Numbers_2001-2017',min.freq=1,
+              scale=c(6,1),
+              colors="black")
+    #colors=rev(gray.colors(30, start = 0.1, end = 0.6, gamma = 2.2)))
+    #colors=brewer.pal(12, "Paired"))
     dev.off()
     
-  }
-  
-  #Longlines
-  fn.stack.area(tops=rev(sort(table(subset(DATA,TYPE=="Elasmo")$SPECIES))),
-                DAT=DATA,NME="Report/Stack.up.plot.report")
-  
-  #Droplines
-  fn.stack.area(tops=rev(sort(table(subset(DATA.DL,TYPE=="Elasmo")$SPECIES))),
-                DAT=DATA.DL,NME="Report/Stack.up.plot.DL.report")
-  
-  
- 
-  #Map of shots and stations
-  fn.map.sht=function(d,NME)
-  {
-    fn.fig(NME,2400,2400)
-    par(mgp=c(1,.8,0))
-    plotMap(worldLLhigh, xlim= c(112,122),ylim=c(-26,-16.8),plt = c(.1, 1, 0.075, 1),
-            col="firebrick",tck = 0.025, tckMinor = 0.0125, xlab="",ylab="",axes=F)
-    box()
-    text(118,-22,("Western"),col="white", cex=3)
-    text(118,-23,("Australia"),col="white", cex=3)
-    points(d$Mid.Long,d$Mid.Lat,cex=2.5,col=rgb(.5,.5,.5,alph=0.075),pch=19)
-    with(Fixed.Stations[1:20,],points(Fix.St.mid.lon,Fix.St.mid.lat,pch=21,bg="white",cex=1.5))
-    with(Fixed.Stations[1:20,],text(Fix.St.mid.lon*0.999,Fix.St.mid.lat,Station.no.,pos=2,cex=1.5,col="dodgerblue4"))
-    mtext("Longitude (?E)",1,-1.5,outer=T,cex=2)
-    mtext("Latitude (?S)",2,line=-1.85,outer=T,cex=2)
-    axis(1,seq(112,120,2),seq(112,120,2),cex.axis=1.25)
-    axis(2,seq(-16,-26,-2),seq(16,26,2),las=1,cex.axis=1.25)
+    #dropline
+    fn.fig("Paper/Species cloud_dropline",2400,2400)
+    a=Table.1
+    names(a)[match('DL.Numbers_1994-2000',names(a))]='dummy'
+    a$dummy=as.numeric(a$dummy)
+    a=subset(a,!is.na(dummy))
+    wordcloud(a$COMMON_NAME,a$dummy,min.freq=1,
+              scale=c(2,1),
+              colors="black")
     dev.off()
     
-  }
-  #Longlines
-  fn.map.sht(d=D.map[!duplicated(D.map$SHEET_NO),],
-             NME="Report/Map.stations")
-  
-  #Droplines
-  fn.map.sht(d=DATA.DL[!duplicated(DATA.DL$SHEET_NO),],
-             NME="Report/Map.stations.DL")
-  
-  #Scalefish size distribution
-  Scale.size=a=subset(DATA,Taxa=="Teleost")
-  Tab.scl=sort(table(Scale.size$SPECIES))
-  Tab.scl=names(Tab.scl[Tab.scl>10])
-  fun.his=function(d)
-  {
-    d=subset(d,TL>0 | !is.na(TL))
-    NM=unique(d$COMMON_NAME)
-    hist(d$TL,ylab="",xlab="",col="grey60",main=NM,cex.main=1.5,cex.axis=1.25)
-    box()
-  }
-  fn.fig("Report/Scalefish.size.comp",2400,2400)
-  par(mfcol=n2mfrow(length(Tab.scl)),mai=c(.275,.15,.3,.3),oma=c(2.5,3.5,.1,.1),las=1,mgp=c(1,.6,0))
-  for(i in 1:length(Tab.scl))fun.his(d=subset(Scale.size,SPECIES==Tab.scl[i]))
-  mtext("Total length(cm)",1,0,outer=T,cex=1.5)
-  mtext("Frequency",2,1.5,outer=T,cex=1.5,las=3)
-  dev.off()
-  
-  
-  #Scatterplot of species by station  (only postive records plot)   
-  plt.dis.sp=TARGETS
-  for(i in 1:length(plt.dis.sp))
-  {
-    fn.fig(paste("density_main_sp/",plt.dis.sp[i],sep=""),2400,2400)
-    par(mfcol=c(2,1),mar=c(2,2,1,1))
-    DAT=subset(DATA.list[[i]],Catch.Target>0)
-    DAT$cpue=250*DAT$Catch.Target/(DAT$SOAK.TIME*DAT$N.hooks.Fixed)
-    smoothScatter(DAT[,match(c("Mid.Long","Mid.Lat"),names(DAT))],main=paste(names(DATA.list)[i],"catch"),
-                  nrpoints = 0,ylab="Lat",xlab="Long",ylim=c(-25.98050,-16.67147),xlim=c(112.6228,122.2861))
-    with(Fixed.Stations[1:20,],points(Fix.St.mid.lon,Fix.St.mid.lat,pch=19,col=2,cex=1.5))
-    with(Fixed.Stations[1:20,],text(Fix.St.mid.lon,Fix.St.mid.lat,Station.no.,pos=3,cex=0.75,col=1))
     
-    points(113.661,-24.884,cex=1.5,pch=17,col=3)
-    text(113.661,-24.884,"Carnarvon",pos=4)
-    points(115.5417,-20.45,cex=1.5,pch=17,col=3)
-    text(115.5417,-20.8,"Montebellos",pos=3, srt=330)
-    points(122.2359,-17.9614,cex=1.5,pch=17,col=3)
-    text(122.3,-18.2,"Broome",pos=2, srt=90)
-    
-    
-    Agg=aggregate(cpue~round(Mid.Long,1)+round((Mid.Lat),1),DAT,mean)
-    names(Agg)=c("Long","Lat","cpue")
-    wide <- reshape(Agg, v.names = "cpue", idvar = "Long",
-                    timevar = "Lat", direction = "wide")
-    wide=wide[order(wide[,1]),]
-    
-    numInt=20
-    Breaks=quantile(Agg$cpue,probs=seq(0,1,1/numInt),na.rm=T)
-    couleurs=rev(heat.colors(numInt))
-    
-    image(wide$Long,sort(unique(round((DAT$Mid.Lat),1))),as.matrix(wide[,-1]),
-          col =couleurs,breaks=Breaks,ylab="Lat",xlab="Long",
-          xlim=c(112,124),ylim=c(-26,-15))
-    color.legend(123,-15,124,-25,
-                 paste(round(Breaks[seq(1,numInt,2)],1)," sharks/250 hour hook"),rect.col=couleurs,gradient="y",cex=.75)
-    
-    
-     dev.off()
-  }
-  
-  #check classification of stations by plotting the YES and NO separately against the stations
-  for (i in 1:N.yrs)
-  {
-    dum=subset(DATA,year==YEAR[i] & N.hooks.Fixed>20 & BOTDEPTH <MaxDepth)
-    dum=dum[!duplicated(dum$SHEET_NO),]
-    YLIM=c(min(dum$Mid.Lat)-0.5,max(dum$Mid.Lat)+0.5)
-    XLIM=c(min(dum$Mid.Long)-0.5,max(dum$Mid.Long)+0.5)   
-    dum.FixeS=subset(dum,FixedStation=="YES")
-    dum.No.FixeS=subset(dum,FixedStation=="NO")  
-    fn.fig(paste("Stations_by_year/",YEAR[i],".Station",sep=""),2400,2400)
-    par(las=1)
-    plot(Fixed.Stations$Long.1,Fixed.Stations$Lat.1,pch=19,cex=1,xlim=XLIM,ylim=YLIM,ylab="LAT",xlab="LONG")
-    points(Fixed.Stations$Long.2,Fixed.Stations$Lat.2,pch=19,cex=1)
-    points(Fixed.Stations$Fix.St.mid.lon,Fixed.Stations$Fix.St.mid.lat,pch=19,cex=1,col=2)
-    points(dum.FixeS$Mid.Long,dum.FixeS$Mid.Lat,pch=19,cex=.5,col=4)
-    points(dum.No.FixeS$Mid.Long,dum.No.FixeS$Mid.Lat,pch=19,cex=.5,col=3)
-    legend("topleft",paste(YEAR[i]),bty='n',cex=2)
-    legend("bottomright",c("Start station","End station","mid point Station","Classed as FS","Class as No FS"),
-           bty='n',cex=1.5,pch=19,col=c(1,1,2,4,3))
+    fn.fig("Paper/Species cloud",2400,2400)
+    par(mfrow=c(2,1),mar=c(.1,.1,.1,.1),oma=c(.1,.1,.1,.1))
+    #dropline
+    a=Table.1
+    names(a)[match('DL.Numbers_1994-2000',names(a))]='dummy'
+    a$dummy=as.numeric(a$dummy)
+    a=subset(a,!is.na(dummy))
+    wordcloud(a$COMMON_NAME,a$dummy,min.freq=1,
+              scale=c(3,.7),
+              colors="black")
+    legend('topleft',"Dropline",bty='n')
+    #longline
+    a=subset(Table.1,!is.na('LL.Numbers_2001-2017'))
+    wordcloud(a$COMMON_NAME,a$'LL.Numbers_2001-2017',min.freq=1,
+              scale=c(3,.7),
+              colors="black")
+    legend('topleft',"Longline",bty='n')
+    #colors=rev(gray.colors(30, start = 0.1, end = 0.6, gamma = 2.2)))
+    #colors=brewer.pal(12, "Paired"))
     dev.off()
-  }
-  
-  
-  #Figure S2.  
-  BIN=10
-  fn.fig("Paper/Figure S2",2000,2400)
-  par(mfcol=n2mfrow(N.species),mai=c(.3,.395,.1,.1),oma=c(3,1.5,2,.1),las=1,mgp=c(.04,.6,0))
-  for(i in 1:N.species)
-  {
-    BINs=BIN
-    if(Tar.names[i]=="Tiger shark") BINs=20
-    SizeFreq.fn(TARGETS[i],Tar.names[i],
-                Fem.Size.Mat[[match(names(TARGETS)[i],names(Fem.Size.Mat))]],BINs)
-    mtext(Tar.names[i],3,line=.05,cex=1.1)
-    if(bySEX=="YES" & i==1)
+    
+    #Scatterplot of species by station  (only postive records plot)   
+    plt.dis.sp=TARGETS
+    for(i in 1:length(plt.dis.sp))
     {
-      #plot(1:10,1:10,bty='n',pch='',xaxt='n',yaxt='n',ann=F)
-      legend("topleft",c("female","male"),fill=c("white","grey70"),bty='n',cex=1.4)
+      fn.fig(paste("density_main_sp/",plt.dis.sp[i],sep=""),2400,2400)
+      par(mfcol=c(2,1),mar=c(2,2,1,1))
+      DAT=subset(DATA.list[[i]],Catch.Target>0)
+      DAT$cpue=250*DAT$Catch.Target/(DAT$SOAK.TIME*DAT$N.hooks.Fixed)
+      smoothScatter(DAT[,match(c("Mid.Long","Mid.Lat"),names(DAT))],main=paste(names(DATA.list)[i],"catch"),
+                    nrpoints = 0,ylab="Lat",xlab="Long",ylim=c(-25.98050,-16.67147),xlim=c(112.6228,122.2861))
+      with(Fixed.Stations[1:20,],points(Fix.St.mid.lon,Fix.St.mid.lat,pch=19,col=2,cex=1.5))
+      with(Fixed.Stations[1:20,],text(Fix.St.mid.lon,Fix.St.mid.lat,Station.no.,pos=3,cex=0.75,col=1))
+      
+      points(113.661,-24.884,cex=1.5,pch=17,col=3)
+      text(113.661,-24.884,"Carnarvon",pos=4)
+      points(115.5417,-20.45,cex=1.5,pch=17,col=3)
+      text(115.5417,-20.8,"Montebellos",pos=3, srt=330)
+      points(122.2359,-17.9614,cex=1.5,pch=17,col=3)
+      text(122.3,-18.2,"Broome",pos=2, srt=90)
+      
+      
+      Agg=aggregate(cpue~round(Mid.Long,1)+round((Mid.Lat),1),DAT,mean)
+      names(Agg)=c("Long","Lat","cpue")
+      wide <- reshape(Agg, v.names = "cpue", idvar = "Long",
+                      timevar = "Lat", direction = "wide")
+      wide=wide[order(wide[,1]),]
+      
+      numInt=20
+      Breaks=quantile(Agg$cpue,probs=seq(0,1,1/numInt),na.rm=T)
+      couleurs=rev(heat.colors(numInt))
+      
+      image(wide$Long,sort(unique(round((DAT$Mid.Lat),1))),as.matrix(wide[,-1]),
+            col =couleurs,breaks=Breaks,ylab="Lat",xlab="Long",
+            xlim=c(112,124),ylim=c(-26,-15))
+      color.legend(123,-15,124,-25,
+                   paste(round(Breaks[seq(1,numInt,2)],1)," sharks/250 hour hook"),rect.col=couleurs,gradient="y",cex=.75)
+      
+      
+      dev.off()
     }
     
-  }
-  mtext("Frequency",side=2,line=-0.35,outer=T,cex=1.5,las=3)
-  mtext("Fork length (cm)",side=1,line=1,outer=T,cex=1.5)
-  dev.off()
-  
-  
-  #Boxplot FL
-  fn.fig("Paper/Boxplot_FL",2000,2400)
-  par(mfcol=n2mfrow(N.species),mai=c(.3,.395,.1,.1),oma=c(3,1.5,2,.1),las=1,mgp=c(.04,.6,0))
-  for(i in 1:N.species)
-  {
-    Kruskal[[i]]=SizeTemp.fn(TARGETS[i],Tar.names[i])
-    mtext(Tar.names[i],3,line=.05,cex=1.1)
-  }
-  mtext("Fork length (cm)",side=2,line=-0.2,outer=T,cex=1.5,las=3)
-  mtext("Year",side=1,line=1,outer=T,cex=1.5)
-  dev.off()
-  
-  
-  
-  #Depth distributions
-  Store.dens=vector('list',N.species)
-  for ( i in 1:N.species) Store.dens[[i]]=Z.dist(TARGETS[i])
-  COLS=rainbow(N.species)
-  LTY=rep(c(1:5,1,3),2)
-  LWD=rep(c(2,2,2,3,2,2,3),2)
-  fn.fig("Depth.dist",2400,2400)
-  par(mfcol=c(1,1),mai=c(.6,.6,.1,.1),oma=c(1,.1,.1,.1),las=1)
-  plot(Store.dens[[4]],col="transparent",xlim=c(0,350),ylim=c(0,.021),yaxt='n',
-       main="",xlab="",ylab="",cex.axis=1.5)
-  for ( i in 1:N.species) lines(Store.dens[[i]],lwd=LWD[i],col=COLS[i],lty=LTY[i])
-  legend("topright",Tar.names,lty=LTY,lwd=LWD,col=COLS,bty='n',cex=1.5)
-  mtext("Depth (m)",side=1,line=3,font=1,las=0,cex=2.,outer=F)
-  mtext("Density",side=2,line=0.5,font=1,las=0,cex=2.5,outer=F)
-  dev.off()
-  
-  # Plot location of positive catches
-  #by species and year
-  #for ( i in 1:N.species)pos.catch.pos(DATA.list[[i]],REFS[[i]],SCALES[i])
-  
-  #species combined
-  #par(mfcol=c(5,3),mai=c(.3,.395,.1,.1),oma=c(3,1.5,2,.1),las=1,mgp=c(.04,.6,0))
-  #for ( i in 1:N.species)pos.catch.pos(DATA.list[[i]],REFS[[i]],SCALES[i]) 
-  
-  
-  #Figure 1.
-  do.map="NO"
-  add.depth="NO"
-  if(do.map=="YES")  
-  {
-    #North West WA
-    library(rgdal)
-    source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R"))
-    
-    JA_Northern_Shark=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/JA_Northern_Shark.shp"), layer="JA_Northern_Shark") 
-    WA_Northern_Shark=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/NorthCoastShark_s43.shp"), layer="NorthCoastShark_s43") 
-    WA_Northern_Shark_2=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/NorthWestCoastShark_s43.shp"), layer="NorthWestCoastShark_s43") 
-    #Shark.zones=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/FisheriesGuide_ConsolidatedNoticesandOrdersDPIRD_061.shp", layer="FisheriesGuide_ConsolidatedNoticesandOrdersDPIRD_061") 
-    #Exception.zones <- readOGR("C:/Matias/Data/Mapping/Shark_shape_files/FisheriesGuide_InstrumentofExemptionDPIRD_051.shp", layer="FisheriesGuide_InstrumentofExemptionDPIRD_051")
-    
-    
-    if(add.depth=="YES") if(!exists("reshaped"))reshaped=as.matrix(reshape(Bathymetry,idvar="V1",timevar="V2",v.names="V3", direction="wide"))
-    
-    LEG=c(as.character(5),"",as.character(10),"",as.character(20))
-    
-    fn.scale=function(x,max,scaler) ((x/max)^0.5)*scaler
-    
-    South.WA.long=c(109,129)
-    South.WA.lat=c(-26,-12)
-    Xlim=South.WA.long
-    Ylim=South.WA.lat
-    Perhooks=100  #present cpue for 100 hooks rather than 1 hook
-    SCALER=3
-    sht.col=rgb(.1, .1, .1, alpha=.15)
-    
-    #Col.Ning=rgb(.2,.2,.2,alpha=.4)
-    Col.Ning="grey80"
-    #Col.NSF=rgb(.4,.4,.4,alpha=.1)
-    Col.NSF="grey50"
-    Col.land="grey95"
-    
-    fn.fig("Paper/Figure 1",2400,2400)
-    par(mfcol=n2mfrow(N.species+1),mar=c(1,1,.5,.5),oma=c(3,3,1,.3),las=1,mgp=c(.04,.6,0))
-    
-    #Add Australia and Closures
-    plot(1,xlim=c(Xlim[1]*0.9995,Xlim[2]*0.99),ylim=Ylim,xlab="",ylab="",axes=F,main="")
-    #plot(1,xlim=South.WA.long,ylim=South.WA.lat,xlab="",ylab="",axes=F,main="")
-    
-    #NSF
-    plot(WA_Northern_Shark,add=T,col=Col.Ning)
-    
-    #WANCS open
-    #mpts <- raster::geom(subset(Exception.zones,name=="The WA North Coast Shark Fishery"))
-    #mpts=as.data.frame(mpts)
-    #polygon((mpts$x/1e5)-14,(mpts$y/1e5)+1.5,col="transparent")
-    polygon(c(123.75,123.75,122.0204,121.4045,120,
-              120,122.3488,123.211, 122.9647),
-            c(-16.33,-11.50386,-11.65960,-12.39937,-12.63298,
-              -17.96708,-17.96708,-17.69453,-16.33),col=Col.NSF)
-    
-    #WANCS closure
-    plot(JA_Northern_Shark,add=T,col=Col.NSF)
-    text(116.8,-16.75,"Closed",srt=45,cex=1.1)
-    text(117.5,-18,"since 2005",srt=45,cex=1.1)
-    #Ningaloo closure
-    plot(WA_Northern_Shark_2,add=T,col=Col.Ning)
-    text(111.1,-21.75,"Closed",srt=65,cex=1.1)
-    text(112,-23,"since 1993",srt=65,cex=1.1)
-    
-    polygon(WAcoast$Longitude,WAcoast$Latitude, col=Col.land)
-    
-    #axis(side = 1, at =South.WA.long[1]:South.WA.long[2], labels = F, tck = -.015)
-    #axis(side = 2, at = South.WA.lat[2]:South.WA.lat[1], labels = F, tck = -.015)
-    axis(side = 1, seq(South.WA.long[1],South.WA.long[2],2), labels =F, tck = -.035)
-    axis(side = 2, seq(South.WA.lat[1],South.WA.lat[2],2), labels = F, tck = -.035)
-    
-    #Stations
-    ddd=Fixed.Stations
-    names(ddd)[match('Station.no.',names(ddd))]='STNum'
-    with(subset(ddd,!STNum=='additional'),points(Long.1,Lat.1,pch=21,bg="black",col=1))
-    axis(2,seq(round(Ylim[1]),round(Ylim[2]),2),-seq(round(Ylim[1]),round(Ylim[2]),2),cex.axis=1.25)
-    box()
-    
-    #Each species   
-    for ( i in 1:N.species)
+    #check classification of stations by plotting the YES and NO separately against the stations
+    for (i in 1:N.yrs)
     {
-      pos.cpue(DATA.list[[i]],SCALER,ADD.zero="NO")    
-      mtext(paste(TARGETS.name[i]),side=3,line=-1.5,font=1,las=0,cex=1)
-      if(i%in%c(2,5,8))axis(1,seq(round(Xlim[1]),round(Xlim[2]),2),seq(round(Xlim[1]),round(Xlim[2]),2),cex.axis=1.25)
-      if(i%in%1:2)axis(2,seq(round(Ylim[1]),round(Ylim[2]),2),-seq(round(Ylim[1]),round(Ylim[2]),2),cex.axis=1.25)
+      dum=subset(DATA,year==YEAR[i] & N.hooks.Fixed>20 & BOTDEPTH <MaxDepth)
+      dum=dum[!duplicated(dum$SHEET_NO),]
+      YLIM=c(min(dum$Mid.Lat)-0.5,max(dum$Mid.Lat)+0.5)
+      XLIM=c(min(dum$Mid.Long)-0.5,max(dum$Mid.Long)+0.5)   
+      dum.FixeS=subset(dum,FixedStation=="YES")
+      dum.No.FixeS=subset(dum,FixedStation=="NO")  
+      fn.fig(paste("Stations_by_year/",YEAR[i],".Station",sep=""),2400,2400)
+      par(las=1)
+      plot(Fixed.Stations$Long.1,Fixed.Stations$Lat.1,pch=19,cex=1,xlim=XLIM,ylim=YLIM,ylab="LAT",xlab="LONG")
+      points(Fixed.Stations$Long.2,Fixed.Stations$Lat.2,pch=19,cex=1)
+      points(Fixed.Stations$Fix.St.mid.lon,Fixed.Stations$Fix.St.mid.lat,pch=19,cex=1,col=2)
+      points(dum.FixeS$Mid.Long,dum.FixeS$Mid.Lat,pch=19,cex=.5,col=4)
+      points(dum.No.FixeS$Mid.Long,dum.No.FixeS$Mid.Lat,pch=19,cex=.5,col=3)
+      legend("topleft",paste(YEAR[i]),bty='n',cex=2)
+      legend("bottomright",c("Start station","End station","mid point Station","Classed as FS","Class as No FS"),
+             bty='n',cex=1.5,pch=19,col=c(1,1,2,4,3))
+      dev.off()
     }
     
-    # #Australia
-    #par(fig = c(.825, .975, 0.025, .125), mar=c(0,0,0,0), new=TRUE)
-    par(fig = c(.175, .3, .675, .8), mar=c(0,0,0,0), new=TRUE)
-    OZ.lat=c(-44.5,South.WA.lat[2]);OZ.long=c(South.WA.long[1],155)
-    plotMap(worldLLhigh, xlim=OZ.long,ylim=OZ.lat,plt = c(.1, 1, 0.075, 1),
-            col='black',tck = 0.025, tckMinor = 0.0125, xlab="",ylab="",axes=F)
-    #col=Col.land,tck = 0.025, tckMinor = 0.0125, xlab="",ylab="",axes=F)
-    box()
-    polygon(x=c(rep(South.WA.long[2],2),rep(South.WA.long[1],2)),y=c(South.WA.lat,rev(South.WA.lat)),lwd=1.5,col=rgb(.4,.2,.2,alpha=.4))
-    text(135,-25,("Australia"),col="white", cex=1.35)
-    mtext(expression(paste("Longitude (",degree,"E)",sep="")),side=1,line=1.5,font=1,las=0,cex=1.35,outer=T)
-    mtext(expression(paste("Latitude (",degree,"S)",sep="")),side=2,line=1,font=1,las=0,cex=1.35,outer=T)
-    dev.off() 
-  }
-  
-  do.GitHub.map="NO"
-  if(do.GitHub.map=="YES")  
-  {
-    #North West WA
-    library(rgdal)
-    source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R"))
-    
-    JA_Northern_Shark=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/JA_Northern_Shark.shp"), layer="JA_Northern_Shark") 
-    WA_Northern_Shark=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/NorthCoastShark_s43.shp"), layer="NorthCoastShark_s43") 
-    WA_Northern_Shark_2=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/NorthWestCoastShark_s43.shp"), layer="NorthWestCoastShark_s43") 
-    
-    
-    SCALER=3
-    LEG=c(as.character(5),"",as.character(10),"",as.character(20))
-    
-    fn.scale=function(x,max,scaler) ((x/max)^0.5)*scaler
-    
-    South.WA.long=c(109,129)
-    South.WA.lat=c(-26,-12)
-    Xlim=South.WA.long
-    Ylim=South.WA.lat
-    Col.Ning="grey80"
-    Col.NSF="grey50"
-    Col.land="grey95"
-    
-    fn.fig("Paper/Figure 1_GitHub",2400,2400)
-    par(mfcol=c(1,1),mar=c(1,1,.5,.5),oma=c(3,3,1,.1),las=1,mgp=c(.04,.6,0))
-    
-    #Add Australia and Closures
-    plot(1,xlim=c(Xlim[1]*0.9995,Xlim[2]*.9975),ylim=Ylim,xlab="",ylab="",axes=F,main="")
-    
-    #NSF
-    plot(WA_Northern_Shark,add=T,col=Col.Ning)
-    
-    #WANCS open
-    polygon(c(123.75,123.75,122.0204,121.4045,120,
-              120,122.3488,123.211, 122.9647),
-            c(-16.33,-11.50386,-11.65960,-12.39937,-12.63298,
-              -17.96708,-17.96708,-17.69453,-16.33),col=Col.NSF)
-    
-    #WANCS closure
-    plot(JA_Northern_Shark,add=T,col=Col.NSF)
-    text(116.8,-16.75,"Closed",srt=45,cex=1.1)
-    text(117.5,-18,"since 2005",srt=45,cex=1.1)
-    #Ningaloo closure
-    plot(WA_Northern_Shark_2,add=T,col=Col.Ning)
-    text(111.1,-21.75,"Closed",srt=65,cex=1.1)
-    text(112,-23,"since 1993",srt=65,cex=1.1)
-    
-    polygon(WAcoast$Longitude,WAcoast$Latitude, col=Col.land)
-    box()
-    
-    #Stations
-    ddd=Fixed.Stations
-    names(ddd)[match('Station.no.',names(ddd))]='STNum'
-    with(subset(ddd,!STNum=='additional'),points(Long.1,Lat.1,pch=21,bg="black",col=1))
-    axis(2,seq(round(Ylim[1]),round(Ylim[2]),2),-seq(round(Ylim[1]),round(Ylim[2]),2),cex.axis=1.25)
-    axis(side = 1, seq(South.WA.long[1],South.WA.long[2],2), 
-         labels =seq(South.WA.long[1],South.WA.long[2],2), tck = -.015,cex.axis=1.25)
-    
-    
-    # #Australia
-    par(fig = c(.6, .9, .1, .4), mar=c(0,0,0,0), new=TRUE)
-    OZ.lat=c(-44.5,South.WA.lat[2]);OZ.long=c(South.WA.long[1],155)
-    plotMap(worldLLhigh, xlim=OZ.long,ylim=OZ.lat,plt = c(.1, 1, 0.075, 1),
-            col='black',tck = 0.025, tckMinor = 0.0125, xlab="",ylab="",axes=F)
-    box()
-    polygon(x=c(rep(South.WA.long[2],2),rep(South.WA.long[1],2)),y=c(South.WA.lat,rev(South.WA.lat)),lwd=1.5,col=rgb(.4,.2,.2,alpha=.4))
-    text(135,-25,("Australia"),col="white", cex=1.35)
-    mtext(expression(paste("Longitude (",degree,"E)",sep="")),side=1,line=1.2,font=1,las=0,cex=1.35,outer=T)
-    mtext(expression(paste("Latitude (",degree,"S)",sep="")),side=2,line=1,font=1,las=0,cex=1.35,outer=T)
-    dev.off() 
-  }
-
-  #Figure S1.   
-  Ymax.vec=rep(.3,N.species)
-  fn.fig("Paper/Figure S1",2000,2400)
-  par(mfcol=n2mfrow(N.species),mai=c(.3,.3,.01,.1),oma=c(3,3,2,.1),las=1,mgp=c(.04,.6,0))
-  for ( i in 1:N.species) plot0(DATA.list[[i]],Ymax.vec[i],Tar.names[i])
-  mtext("Number of animals per set",side=1,line=1,font=1,las=0,cex=1.25,outer=T)
-  mtext("Proportion of sets with catch",side=2,line=.5,font=1,las=0,cex=1.25,outer=T)
-  dev.off()
-  
-  
-
-  #Effort all vs fixed stations
-  fn.fig("Paper/Effort all vs fixed stations",2400,2400)
-  par(mfcol=c(1,1),mai=c(.6,.8,.1,.1),oma=c(1,.1,.1,.1),las=1,mgp=c(2.15, .65, 0))
-  plot(2002:YEAR[length(YEAR)],2002:YEAR[length(YEAR)],ylim=c(0,26),ylab="Effort (1000 hook hours)",xlab="Year",
-       cex.lab=1.95, col="transparent",cex.axis=1.5)
-  All.Eff=Eff.All.stations[,2]/1000
-  lines(YEAR[1:2],All.Eff[1:2],lwd=2.5,col=1)
-  lines(YEAR[3:length(YEAR)],All.Eff[3:length(YEAR)],lwd=2.5,col=1)
-  
-  Fixed.Eff=Eff.Fixed.stations[,2]/1000
-  lines(YEAR[1:2],Fixed.Eff[1:2],lwd=2.5,col="grey40",lty=2)
-  lines(YEAR[3:length(YEAR)],Fixed.Eff[3:length(YEAR)],lwd=2.5,col="grey40",lty=2)
-  legend("topleft",c("All stations", "Fixed stations only"),col=c("black","grey40"),lty=1:2,bty='n',lwd=2,cex=1.75)
-  axis(1,2002:YEAR[length(YEAR)],F)
-  dev.off()
-  
-  # Anova tables for abundance and size trends
-  ANOV.TAB=vector('list',N.species) 
-  for (i in 1:N.species)  ANOV.TAB[[i]]=Anova.tab(mod=Store[[i]]$Fit,Fcol="Chi.sq")
-  ANVA.abundance=do.call(rbind,ANOV.TAB)
-  ANVA.abundance$counter=1:nrow(ANVA.abundance)
-  
-  ANOV.TAB.FL=vector('list',N.species) 
-  for (i in 1:N.species)  ANOV.TAB.FL[[i]]=Anova.tab(mod=Store.size[[i]]$Fit,Fcol="F")
-  ANVA.size=do.call(rbind,ANOV.TAB.FL)
-  ANVA.size$counter=1:nrow(ANVA.size)
-  
-  ANoVA=full_join(ANVA.abundance,ANVA.size,by="Join",all=T)%>%
-        arrange(counter.y)
-  write.csv(ANoVA,paste(getwd(),"/Paper/Anovas/Table1_anova.csv",sep=""),row.names=F)
-  
-  
-  #---Abundance trends---   
-  ADD.P="NO"
-  #2. Effect of latitude on abundance   
-      #fixed stations
-  fn.fig("Paper/Figure 3",2400,2400)
-  par(mfcol=n2mfrow(N.species-sum(sapply(PRED.lat,is.null))),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
-  for(i in 1:N.species)
-  {
-    dummy=PRED.lat[[i]]
-    if(!is.null(dummy))
+    #Figure S2.  
+    BIN=10
+    fn.fig("Paper/Figure S2",2000,2400)
+    par(mfcol=n2mfrow(N.species),mai=c(.3,.395,.1,.1),oma=c(3,1.5,2,.1),las=1,mgp=c(.04,.6,0))
+    for(i in 1:N.species)
     {
-      #names(dummy)[6:7]=c("lower.CL","upper.CL")
-      dummy=cbind(dummy,CV=NA)
-      dummy$yr=dummy$Mid.Lat
-      id=match("response",names(dummy))
-      if(length(id)>0) names(dummy)[id]="emmean"
-      dummy$MEAN=dummy$emmean
-      dummy$UP=dummy$upper.CL
-      dummy$LOW=dummy$lower.CL
-      a=fun.plot.yr.pred(dummy,X="Mid.Lat",normalised="YES",REV="NO",n.seq=1,YLIM=NULL,XLIM=NULL,Type="polygon")
+      BINs=BIN
+      if(Tar.names[i]=="Tiger shark") BINs=20
+      SizeFreq.fn(TARGETS[i],Tar.names[i],
+                  Fem.Size.Mat[[match(names(TARGETS)[i],names(Fem.Size.Mat))]],BINs)
+      mtext(Tar.names[i],3,line=.05,cex=1.1)
+      if(bySEX=="YES" & i==1)
+      {
+        #plot(1:10,1:10,bty='n',pch='',xaxt='n',yaxt='n',ann=F)
+        legend("topleft",c("female","male"),fill=c("white","grey70"),bty='n',cex=1.4)
+      }
+      
+    }
+    mtext("Frequency",side=2,line=-0.35,outer=T,cex=1.5,las=3)
+    mtext("Fork length (cm)",side=1,line=1,outer=T,cex=1.5)
+    dev.off()
+    
+    
+    #Boxplot FL
+    fn.fig("Paper/Boxplot_FL",2000,2400)
+    par(mfcol=n2mfrow(N.species),mai=c(.3,.395,.1,.1),oma=c(3,1.5,2,.1),las=1,mgp=c(.04,.6,0))
+    for(i in 1:N.species)
+    {
+      Kruskal[[i]]=SizeTemp.fn(TARGETS[i],Tar.names[i])
       mtext(Tar.names[i],3,line=.05,cex=1.1)
     }
+    mtext("Fork length (cm)",side=2,line=-0.2,outer=T,cex=1.5,las=3)
+    mtext("Year",side=1,line=1,outer=T,cex=1.5)
+    dev.off()
     
-    #add p values
-    if(ADD.P=="YES")
+    #Depth distributions
+    Store.dens=vector('list',N.species)
+    for ( i in 1:N.species) Store.dens[[i]]=Z.dist(TARGETS[i])
+    COLS=rainbow(N.species)
+    LTY=rep(c(1:5,1,3),2)
+    LWD=rep(c(2,2,2,3,2,2,3),2)
+    fn.fig("Depth.dist",2400,2400)
+    par(mfcol=c(1,1),mai=c(.6,.6,.1,.1),oma=c(1,.1,.1,.1),las=1)
+    plot(Store.dens[[4]],col="transparent",xlim=c(0,350),ylim=c(0,.021),yaxt='n',
+         main="",xlab="",ylab="",cex.axis=1.5)
+    for ( i in 1:N.species) lines(Store.dens[[i]],lwd=LWD[i],col=COLS[i],lty=LTY[i])
+    legend("topright",Tar.names,lty=LTY,lwd=LWD,col=COLS,bty='n',cex=1.5)
+    mtext("Depth (m)",side=1,line=3,font=1,las=0,cex=2.,outer=F)
+    mtext("Density",side=2,line=0.5,font=1,las=0,cex=2.5,outer=F)
+    dev.off()
+    
+    # Plot location of positive catches
+    #by species and year
+    #for ( i in 1:N.species)pos.catch.pos(DATA.list[[i]],REFS[[i]],SCALES[i])
+    
+    #species combined
+    #par(mfcol=c(5,3),mai=c(.3,.395,.1,.1),oma=c(3,1.5,2,.1),las=1,mgp=c(.04,.6,0))
+    #for ( i in 1:N.species)pos.catch.pos(DATA.list[[i]],REFS[[i]],SCALES[i]) 
+    
+    
+    #Figure 1.
+    do.map="NO"
+    add.depth="NO"
+    if(do.map=="YES")  
     {
-          Count.p=Zero.p=NULL
-    Nms=Sig.term.coeff[[i]]$Sigi.count   
-    id=which(names(Nms)=='log.Mid.Lat')
-    if(length(id)>0)
-    {
-      Count.p=Nms[id]
-      dd1=Count.p
-      if(dd1>=0.01 & dd1<0.05) Count.p=paste("Count","*",sep="")
-      if(dd1>=0.001 & dd1<0.01) Count.p=paste("Count","**",sep="")
-      if(dd1<0.001) Count.p=paste("Count","***",sep="")
+      #North West WA
+      library(rgdal)
+      source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R"))
+      
+      JA_Northern_Shark=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/JA_Northern_Shark.shp"), layer="JA_Northern_Shark") 
+      WA_Northern_Shark=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/NorthCoastShark_s43.shp"), layer="NorthCoastShark_s43") 
+      WA_Northern_Shark_2=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/NorthWestCoastShark_s43.shp"), layer="NorthWestCoastShark_s43") 
+      #Shark.zones=readOGR("C:/Matias/Data/Mapping/Shark_shape_files/FisheriesGuide_ConsolidatedNoticesandOrdersDPIRD_061.shp", layer="FisheriesGuide_ConsolidatedNoticesandOrdersDPIRD_061") 
+      #Exception.zones <- readOGR("C:/Matias/Data/Mapping/Shark_shape_files/FisheriesGuide_InstrumentofExemptionDPIRD_051.shp", layer="FisheriesGuide_InstrumentofExemptionDPIRD_051")
+      
+      
+      if(add.depth=="YES") if(!exists("reshaped"))reshaped=as.matrix(reshape(Bathymetry,idvar="V1",timevar="V2",v.names="V3", direction="wide"))
+      
+      LEG=c(as.character(5),"",as.character(10),"",as.character(20))
+      
+      fn.scale=function(x,max,scaler) ((x/max)^0.5)*scaler
+      
+      South.WA.long=c(109,129)
+      South.WA.lat=c(-26,-12)
+      Xlim=South.WA.long
+      Ylim=South.WA.lat
+      Perhooks=100  #present cpue for 100 hooks rather than 1 hook
+      SCALER=3
+      sht.col=rgb(.1, .1, .1, alpha=.15)
+      
+      #Col.Ning=rgb(.2,.2,.2,alpha=.4)
+      Col.Ning="grey80"
+      #Col.NSF=rgb(.4,.4,.4,alpha=.1)
+      Col.NSF="grey50"
+      Col.land="grey95"
+      
+      fn.fig("Paper/Figure 1",2400,2400)
+      par(mfcol=n2mfrow(N.species+1),mar=c(1,1,.5,.5),oma=c(3,3,1,.3),las=1,mgp=c(.04,.6,0))
+      
+      #Add Australia and Closures
+      plot(1,xlim=c(Xlim[1]*0.9995,Xlim[2]*0.99),ylim=Ylim,xlab="",ylab="",axes=F,main="")
+      #plot(1,xlim=South.WA.long,ylim=South.WA.lat,xlab="",ylab="",axes=F,main="")
+      
+      #NSF
+      plot(WA_Northern_Shark,add=T,col=Col.Ning)
+      
+      #WANCS open
+      #mpts <- raster::geom(subset(Exception.zones,name=="The WA North Coast Shark Fishery"))
+      #mpts=as.data.frame(mpts)
+      #polygon((mpts$x/1e5)-14,(mpts$y/1e5)+1.5,col="transparent")
+      polygon(c(123.75,123.75,122.0204,121.4045,120,
+                120,122.3488,123.211, 122.9647),
+              c(-16.33,-11.50386,-11.65960,-12.39937,-12.63298,
+                -17.96708,-17.96708,-17.69453,-16.33),col=Col.NSF)
+      
+      #WANCS closure
+      plot(JA_Northern_Shark,add=T,col=Col.NSF)
+      text(116.8,-16.75,"Closed",srt=45,cex=1.1)
+      text(117.5,-18,"since 2005",srt=45,cex=1.1)
+      #Ningaloo closure
+      plot(WA_Northern_Shark_2,add=T,col=Col.Ning)
+      text(111.1,-21.75,"Closed",srt=65,cex=1.1)
+      text(112,-23,"since 1993",srt=65,cex=1.1)
+      
+      polygon(WAcoast$Longitude,WAcoast$Latitude, col=Col.land)
+      
+      #axis(side = 1, at =South.WA.long[1]:South.WA.long[2], labels = F, tck = -.015)
+      #axis(side = 2, at = South.WA.lat[2]:South.WA.lat[1], labels = F, tck = -.015)
+      axis(side = 1, seq(South.WA.long[1],South.WA.long[2],2), labels =F, tck = -.035)
+      axis(side = 2, seq(South.WA.lat[1],South.WA.lat[2],2), labels = F, tck = -.035)
+      
+      #Stations
+      ddd=Fixed.Stations
+      names(ddd)[match('Station.no.',names(ddd))]='STNum'
+      with(subset(ddd,!STNum=='additional'),points(Long.1,Lat.1,pch=21,bg="black",col=1))
+      axis(2,seq(round(Ylim[1]),round(Ylim[2]),2),-seq(round(Ylim[1]),round(Ylim[2]),2),cex.axis=1.25)
+      box()
+      
+      #Each species   
+      for ( i in 1:N.species)
+      {
+        pos.cpue(DATA.list[[i]],SCALER,ADD.zero="NO")    
+        mtext(paste(TARGETS.name[i]),side=3,line=-1.5,font=1,las=0,cex=1)
+        if(i%in%c(2,5,8))axis(1,seq(round(Xlim[1]),round(Xlim[2]),2),seq(round(Xlim[1]),round(Xlim[2]),2),cex.axis=1.25)
+        if(i%in%1:2)axis(2,seq(round(Ylim[1]),round(Ylim[2]),2),-seq(round(Ylim[1]),round(Ylim[2]),2),cex.axis=1.25)
+      }
+      
+      # #Australia
+      #par(fig = c(.825, .975, 0.025, .125), mar=c(0,0,0,0), new=TRUE)
+      par(fig = c(.175, .3, .675, .8), mar=c(0,0,0,0), new=TRUE)
+      OZ.lat=c(-44.5,South.WA.lat[2]);OZ.long=c(South.WA.long[1],155)
+      plotMap(worldLLhigh, xlim=OZ.long,ylim=OZ.lat,plt = c(.1, 1, 0.075, 1),
+              col='black',tck = 0.025, tckMinor = 0.0125, xlab="",ylab="",axes=F)
+      #col=Col.land,tck = 0.025, tckMinor = 0.0125, xlab="",ylab="",axes=F)
+      box()
+      polygon(x=c(rep(South.WA.long[2],2),rep(South.WA.long[1],2)),y=c(South.WA.lat,rev(South.WA.lat)),lwd=1.5,col=rgb(.4,.2,.2,alpha=.4))
+      text(135,-25,("Australia"),col="white", cex=1.35)
+      mtext(expression(paste("Longitude (",degree,"E)",sep="")),side=1,line=1.5,font=1,las=0,cex=1.35,outer=T)
+      mtext(expression(paste("Latitude (",degree,"S)",sep="")),side=2,line=1,font=1,las=0,cex=1.35,outer=T)
+      dev.off() 
     }
-    Nms=Sig.term.coeff[[i]]$Sigi.zero
-    id.z=which(names(Nms)=='log.Mid.Lat')
-    if(length(id.z)>0) 
+    
+    do.GitHub.map="NO"
+    if(do.GitHub.map=="YES")  
     {
-      Zero.p=Nms[id.z]
-      dd1=Zero.p
-      if(dd1>=0.01 & dd1<0.05) Zero.p=paste("Zero","*",sep="")
-      if(dd1>=0.001 & dd1<0.01) Zero.p=paste("Zero","**",sep="")
-      if(dd1<0.001) Zero.p=paste("Zero","***",sep="")
+      #North West WA
+      library(rgdal)
+      source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R"))
+      
+      JA_Northern_Shark=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/JA_Northern_Shark.shp"), layer="JA_Northern_Shark") 
+      WA_Northern_Shark=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/NorthCoastShark_s43.shp"), layer="NorthCoastShark_s43") 
+      WA_Northern_Shark_2=readOGR(handl_OneDrive("Data/Mapping/Shark_shape_files/NorthWestCoastShark_s43.shp"), layer="NorthWestCoastShark_s43") 
+      
+      
+      SCALER=3
+      LEG=c(as.character(5),"",as.character(10),"",as.character(20))
+      
+      fn.scale=function(x,max,scaler) ((x/max)^0.5)*scaler
+      
+      South.WA.long=c(109,129)
+      South.WA.lat=c(-26,-12)
+      Xlim=South.WA.long
+      Ylim=South.WA.lat
+      Col.Ning="grey80"
+      Col.NSF="grey50"
+      Col.land="grey95"
+      
+      fn.fig("Paper/Figure 1_GitHub",2400,2400)
+      par(mfcol=c(1,1),mar=c(1,1,.5,.5),oma=c(3,3,1,.1),las=1,mgp=c(.04,.6,0))
+      
+      #Add Australia and Closures
+      plot(1,xlim=c(Xlim[1]*0.9995,Xlim[2]*.9975),ylim=Ylim,xlab="",ylab="",axes=F,main="")
+      
+      #NSF
+      plot(WA_Northern_Shark,add=T,col=Col.Ning)
+      
+      #WANCS open
+      polygon(c(123.75,123.75,122.0204,121.4045,120,
+                120,122.3488,123.211, 122.9647),
+              c(-16.33,-11.50386,-11.65960,-12.39937,-12.63298,
+                -17.96708,-17.96708,-17.69453,-16.33),col=Col.NSF)
+      
+      #WANCS closure
+      plot(JA_Northern_Shark,add=T,col=Col.NSF)
+      text(116.8,-16.75,"Closed",srt=45,cex=1.1)
+      text(117.5,-18,"since 2005",srt=45,cex=1.1)
+      #Ningaloo closure
+      plot(WA_Northern_Shark_2,add=T,col=Col.Ning)
+      text(111.1,-21.75,"Closed",srt=65,cex=1.1)
+      text(112,-23,"since 1993",srt=65,cex=1.1)
+      
+      polygon(WAcoast$Longitude,WAcoast$Latitude, col=Col.land)
+      box()
+      
+      #Stations
+      ddd=Fixed.Stations
+      names(ddd)[match('Station.no.',names(ddd))]='STNum'
+      with(subset(ddd,!STNum=='additional'),points(Long.1,Lat.1,pch=21,bg="black",col=1))
+      axis(2,seq(round(Ylim[1]),round(Ylim[2]),2),-seq(round(Ylim[1]),round(Ylim[2]),2),cex.axis=1.25)
+      axis(side = 1, seq(South.WA.long[1],South.WA.long[2],2), 
+           labels =seq(South.WA.long[1],South.WA.long[2],2), tck = -.015,cex.axis=1.25)
+      
+      
+      # #Australia
+      par(fig = c(.6, .9, .1, .4), mar=c(0,0,0,0), new=TRUE)
+      OZ.lat=c(-44.5,South.WA.lat[2]);OZ.long=c(South.WA.long[1],155)
+      plotMap(worldLLhigh, xlim=OZ.long,ylim=OZ.lat,plt = c(.1, 1, 0.075, 1),
+              col='black',tck = 0.025, tckMinor = 0.0125, xlab="",ylab="",axes=F)
+      box()
+      polygon(x=c(rep(South.WA.long[2],2),rep(South.WA.long[1],2)),y=c(South.WA.lat,rev(South.WA.lat)),lwd=1.5,col=rgb(.4,.2,.2,alpha=.4))
+      text(135,-25,("Australia"),col="white", cex=1.35)
+      mtext(expression(paste("Longitude (",degree,"E)",sep="")),side=1,line=1.2,font=1,las=0,cex=1.35,outer=T)
+      mtext(expression(paste("Latitude (",degree,"S)",sep="")),side=2,line=1,font=1,las=0,cex=1.35,outer=T)
+      dev.off() 
     }
-    LGN=c(Count.p,Zero.p)
-    if(!is.null(LGN))legend("bottomleft",LGN,bty='n',cex=1.25)
-    }
-  }
-  mtext("Relative CPUE",2,outer=T,line=-0.5,cex=1.5,las=3)
-  mtext(expression(paste("Latitude (",degree,"S)",sep="")),1,outer=T,line=0.5,cex=1.5)
-  dev.off()
-  
-
-  #3. Effect of depth on abundance
-      #fixed stations 
-  fn.fig("Paper/Figure 4",2400,2400)
-  par(mfcol=n2mfrow(N.species-sum(sapply(PRED.z,is.null))),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
-  limX=c(20,200)
-  for(i in 1:N.species)
-  {
-    dummy=PRED.z[[i]]
-    if(!is.null(dummy))
+    
+    #Figure S1.   
+    Ymax.vec=rep(.3,N.species)
+    fn.fig("Paper/Figure S1",2000,2400)
+    par(mfcol=n2mfrow(N.species),mai=c(.3,.3,.01,.1),oma=c(3,3,2,.1),las=1,mgp=c(.04,.6,0))
+    for ( i in 1:N.species) plot0(DATA.list[[i]],Ymax.vec[i],Tar.names[i])
+    mtext("Number of animals per set",side=1,line=1,font=1,las=0,cex=1.25,outer=T)
+    mtext("Proportion of sets with catch",side=2,line=.5,font=1,las=0,cex=1.25,outer=T)
+    dev.off()
+    
+    
+    
+    #Effort all vs fixed stations
+    fn.fig("Paper/Effort all vs fixed stations",2400,2400)
+    par(mfcol=c(1,1),mai=c(.6,.8,.1,.1),oma=c(1,.1,.1,.1),las=1,mgp=c(2.15, .65, 0))
+    plot(2002:YEAR[length(YEAR)],2002:YEAR[length(YEAR)],ylim=c(0,26),ylab="Effort (1000 hook hours)",xlab="Year",
+         cex.lab=1.95, col="transparent",cex.axis=1.5)
+    All.Eff=Eff.All.stations[,2]/1000
+    lines(YEAR[1:2],All.Eff[1:2],lwd=2.5,col=1)
+    lines(YEAR[3:length(YEAR)],All.Eff[3:length(YEAR)],lwd=2.5,col=1)
+    
+    Fixed.Eff=Eff.Fixed.stations[,2]/1000
+    lines(YEAR[1:2],Fixed.Eff[1:2],lwd=2.5,col="grey40",lty=2)
+    lines(YEAR[3:length(YEAR)],Fixed.Eff[3:length(YEAR)],lwd=2.5,col="grey40",lty=2)
+    legend("topleft",c("All stations", "Fixed stations only"),col=c("black","grey40"),lty=1:2,bty='n',lwd=2,cex=1.75)
+    axis(1,2002:YEAR[length(YEAR)],F)
+    dev.off()
+    
+    # Anova tables for abundance and size trends
+    ANOV.TAB=vector('list',N.species) 
+    for (i in 1:N.species)  ANOV.TAB[[i]]=Anova.tab(mod=Store[[i]]$Fit,Fcol="Chi.sq")
+    ANVA.abundance=do.call(rbind,ANOV.TAB)
+    ANVA.abundance$counter=1:nrow(ANVA.abundance)
+    
+    ANOV.TAB.FL=vector('list',N.species) 
+    for (i in 1:N.species)  ANOV.TAB.FL[[i]]=Anova.tab(mod=Store.size[[i]]$Fit,Fcol="F")
+    ANVA.size=do.call(rbind,ANOV.TAB.FL)
+    ANVA.size$counter=1:nrow(ANVA.size)
+    
+    ANoVA=full_join(ANVA.abundance,ANVA.size,by="Join",all=T)%>%
+      arrange(counter.y)
+    write.csv(ANoVA,paste(getwd(),"/Paper/Anovas/Table1_anova.csv",sep=""),row.names=F)
+    
+    
+    #---Abundance trends---   
+    ADD.P="NO"
+    #2. Effect of latitude on abundance   
+    #fixed stations
+    fn.fig("Paper/Figure 3",2400,2400)
+    par(mfcol=n2mfrow(N.species-sum(sapply(PRED.lat,is.null))),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
+    for(i in 1:N.species)
     {
-      #names(dummy)[6:7]=c("lower.CL","upper.CL")
-      dummy=cbind(dummy,CV=NA)
-      dummy$yr=dummy$BOTDEPTH
-      id=match("response",names(dummy))
-      if(length(id)>0) names(dummy)[id]="emmean"
-      dummy$MEAN=dummy$emmean
-      dummy$UP=dummy$upper.CL
-      dummy$LOW=dummy$lower.CL
-      a=fun.plot.yr.pred(dummy,X="BOTDEPTH",normalised="YES",REV="NO",n.seq=10,YLIM=NULL,XLIM=limX,Type="polygon")
-      mtext(Tar.names[i],3,line=.05,cex=1.1)
-    }
-    if(ADD.P=="YES")
-    {
+      dummy=PRED.lat[[i]]
+      if(!is.null(dummy))
+      {
+        #names(dummy)[6:7]=c("lower.CL","upper.CL")
+        dummy=cbind(dummy,CV=NA)
+        dummy$yr=dummy$Mid.Lat
+        id=match("response",names(dummy))
+        if(length(id)>0) names(dummy)[id]="emmean"
+        dummy$MEAN=dummy$emmean
+        dummy$UP=dummy$upper.CL
+        dummy$LOW=dummy$lower.CL
+        a=fun.plot.yr.pred(dummy,X="Mid.Lat",normalised="YES",REV="NO",n.seq=1,YLIM=NULL,XLIM=NULL,Type="polygon")
+        mtext(Tar.names[i],3,line=.05,cex=1.1)
+      }
+      
       #add p values
-      Count.p=Zero.p=NULL
-      Nms=Sig.term.coeff[[i]]$Sigi.count
-      id=which(names(Nms)=='log.BOTDEPTH')
-      if(length(id)>0)
+      if(ADD.P=="YES")
       {
-        Count.p=Nms[id]
-        dd1=Count.p
-        if(dd1>=0.01 & dd1<0.05) Count.p=paste("Count","*",sep="")
-        if(dd1>=0.001 & dd1<0.01) Count.p=paste("Count","**",sep="")
-        if(dd1<0.001) Count.p=paste("Count","***",sep="")
+        Count.p=Zero.p=NULL
+        Nms=Sig.term.coeff[[i]]$Sigi.count   
+        id=which(names(Nms)=='log.Mid.Lat')
+        if(length(id)>0)
+        {
+          Count.p=Nms[id]
+          dd1=Count.p
+          if(dd1>=0.01 & dd1<0.05) Count.p=paste("Count","*",sep="")
+          if(dd1>=0.001 & dd1<0.01) Count.p=paste("Count","**",sep="")
+          if(dd1<0.001) Count.p=paste("Count","***",sep="")
+        }
+        Nms=Sig.term.coeff[[i]]$Sigi.zero
+        id.z=which(names(Nms)=='log.Mid.Lat')
+        if(length(id.z)>0) 
+        {
+          Zero.p=Nms[id.z]
+          dd1=Zero.p
+          if(dd1>=0.01 & dd1<0.05) Zero.p=paste("Zero","*",sep="")
+          if(dd1>=0.001 & dd1<0.01) Zero.p=paste("Zero","**",sep="")
+          if(dd1<0.001) Zero.p=paste("Zero","***",sep="")
+        }
+        LGN=c(Count.p,Zero.p)
+        if(!is.null(LGN))legend("bottomleft",LGN,bty='n',cex=1.25)
       }
-      Nms=Sig.term.coeff[[i]]$Sigi.zero
-      id.z=which(names(Nms)=='log.BOTDEPTH')
-      if(length(id.z)>0) 
-      {
-        Zero.p=Nms[id.z]
-        dd1=Zero.p
-        if(dd1>=0.01 & dd1<0.05) Zero.p=paste("Zero","*",sep="")
-        if(dd1>=0.001 & dd1<0.01) Zero.p=paste("Zero","**",sep="")
-        if(dd1<0.001) Zero.p=paste("Zero","***",sep="")
-      }
-      LGN=c(Count.p,Zero.p)
-      Whre="topleft"
-      if(Tar.names[i]=="Milk shark")Whre="bottomright"
-      if(!is.null(LGN))legend(Whre,LGN,bty='n',cex=1.25)
     }
+    mtext("Relative CPUE",2,outer=T,line=-0.5,cex=1.5,las=3)
+    mtext(expression(paste("Latitude (",degree,"S)",sep="")),1,outer=T,line=0.5,cex=1.5)
+    dev.off()
+    
+    
+    #3. Effect of depth on abundance
+    #fixed stations 
+    fn.fig("Paper/Figure 4",2400,2400)
+    par(mfcol=n2mfrow(N.species-sum(sapply(PRED.z,is.null))),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
+    limX=c(20,200)
+    for(i in 1:N.species)
+    {
+      dummy=PRED.z[[i]]
+      if(!is.null(dummy))
+      {
+        #names(dummy)[6:7]=c("lower.CL","upper.CL")
+        dummy=cbind(dummy,CV=NA)
+        dummy$yr=dummy$BOTDEPTH
+        id=match("response",names(dummy))
+        if(length(id)>0) names(dummy)[id]="emmean"
+        dummy$MEAN=dummy$emmean
+        dummy$UP=dummy$upper.CL
+        dummy$LOW=dummy$lower.CL
+        a=fun.plot.yr.pred(dummy,X="BOTDEPTH",normalised="YES",REV="NO",n.seq=10,YLIM=NULL,XLIM=limX,Type="polygon")
+        mtext(Tar.names[i],3,line=.05,cex=1.1)
+      }
+      if(ADD.P=="YES")
+      {
+        #add p values
+        Count.p=Zero.p=NULL
+        Nms=Sig.term.coeff[[i]]$Sigi.count
+        id=which(names(Nms)=='log.BOTDEPTH')
+        if(length(id)>0)
+        {
+          Count.p=Nms[id]
+          dd1=Count.p
+          if(dd1>=0.01 & dd1<0.05) Count.p=paste("Count","*",sep="")
+          if(dd1>=0.001 & dd1<0.01) Count.p=paste("Count","**",sep="")
+          if(dd1<0.001) Count.p=paste("Count","***",sep="")
+        }
+        Nms=Sig.term.coeff[[i]]$Sigi.zero
+        id.z=which(names(Nms)=='log.BOTDEPTH')
+        if(length(id.z)>0) 
+        {
+          Zero.p=Nms[id.z]
+          dd1=Zero.p
+          if(dd1>=0.01 & dd1<0.05) Zero.p=paste("Zero","*",sep="")
+          if(dd1>=0.001 & dd1<0.01) Zero.p=paste("Zero","**",sep="")
+          if(dd1<0.001) Zero.p=paste("Zero","***",sep="")
+        }
+        LGN=c(Count.p,Zero.p)
+        Whre="topleft"
+        if(Tar.names[i]=="Milk shark")Whre="bottomright"
+        if(!is.null(LGN))legend(Whre,LGN,bty='n',cex=1.25)
+      }
+    }
+    mtext("Relative CPUE",2,outer=T,line=-0.5,cex=1.5,las=3)
+    mtext("Depth (m)",1,outer=T,line=0.5,cex=1.5)
+    dev.off()
+    
+    
+    #4. Effect of time on abundance
+    #fixed stations
+    INDEX=PRED.CPUE
+    Plus=0.3
+    fn.fig("Paper/Figure 2",2400,2400)
+    par(mfcol=n2mfrow(N.species),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
+    LimX=c(min(DATA.list$`Sandbar shark`$year),max(DATA.list$`Sandbar shark`$year))
+    for(i in Species.cpue)
+    {
+      Nml=fn.nmnl(dat=subset(DATA.list[[i]],FixedStation=="YES" & BOTDEPTH<210),REL="YES")
+      dummy=PRED.CPUE[[i]]
+      #names(dummy)[5:6]=c("lower.CL","upper.CL")
+      dummy$yr=dummy$year
+      id=match("response",names(dummy))
+      if(length(id)>0) names(dummy)[id]="emmean"
+      dummy$MEAN=dummy$emmean
+      dummy$UP=dummy$upper.CL
+      dummy$LOW=dummy$lower.CL
+      dummy$CV=100*dummy$SE/dummy$MEAN
+      
+      MaX=max(c(dummy$UP/mean(dummy$MEAN),Nml$up95),na.rm=T)
+      
+      INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,YLIM=c(0,MaX),XLIM=LimX,Type="points")
+      
+      #add nominal
+      #with(Nml,points(year+Plus, mean, "o", pch=16, lty=2, col="grey50"))
+      with(Nml,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
+      suppressWarnings(with(Nml,arrows(x0=year+Plus, y0=low95,x1=year+Plus, y1=up95, 
+                                       code=3, angle=90, length=0.025, col="grey70")))
+      mtext(Tar.names[i],3,line=.05,cex=1.1)
+    }
+    mtext("Relative CPUE",2,outer=T,line=-0.5,cex=1.5,las=3)
+    mtext("Year",1,outer=T,line=0.5,cex=1.5)
+    plot.new()
+    legend('topright',c("standardised","nominal"),bty='n',cex=1.5,pch=19,col=c("black","grey70"))
+    dev.off()
+    
+    
+    #---Sex ratio trends---
+    if(do.sex.ratio=="YES")
+    {
+      #fixed stations
+      fn.fig("Paper/Prop_male_year",2000,2400)
+      par(mfcol=c(5,3),mai=c(.3,.38,.01,.1),oma=c(3,1.25,2,.1),las=1,mgp=c(.04,.6,0))
+      for(i in 1:N.species.sex)
+      {
+        fun.plot.yr.pred.arrows.size(BOOTS=STORE.BOOT.sex[[i]],normalised="NO")
+        mtext(names(STORE.BOOT.sex)[i],3,line=.05,cex=1.1)
+      }
+      mtext("Proportion of males",2,outer=T,line=-0.5,cex=1.75,las=3)
+      mtext("Year",1,outer=T,line=1,cex=1.75)
+      dev.off()
+      
+      
+      #Anova tables
+      TABL.sex=vector('list',length(Store.SEX))
+      names(TABL.sex)=names(Store.SEX)
+      for (i in 1:N.species.sex) TABL.sex[[i]]=fn.anova.table(Store.SEX[[i]])
+      TABL.sex=do.call(cbind,TABL.sex)
+      TABL.sex=cbind(Terms=rownames(TABL.sex),TABL.sex)
+      write.csv(TABL.sex,"Paper/Anovas/TABL.sex.csv",row.names=F)
+      
+      #Depth and latitude trends
+      #select species for which depth or latitude are significant
+      depth.sp=c("Blacktip sharks","Scalloped hammerhead",
+                 "Great hammerhead","Pigeye shark","Lemon shark")	
+      Lat.sp=c("Sandbar shark","Milk shark","Blacktip sharks","Pigeye shark")
+      fn.fig("Paper/Depth_Lat_effect_prop_male",2000,2400)
+      par(mfcol=c(2,1),mai=c(.3,.3,.3,.1),oma=c(2,2,.3,.1),mgp=c(2.5, .5, 0),las=1)
+      
+      #Proportion of males changes with latitude
+      Store.SEX.show.lat=Store.SEX[match(Lat.sp,names(Store.SEX))]
+      fn.plt.pred.lat.z.sx.size(D=Store.SEX.show.lat,varX="LAT.seq",
+                                varY="LAT.preds",REVRT="YES",CL=1:15,XLIM=c(17,25),YLIM=c(0,1))
+      mtext("Latitude (?S)",1,line=1.9,cex=1.5)
+      
+      #Proportion of males changes with depth
+      Store.SEX.show.depth=Store.SEX[match(depth.sp,names(Store.SEX))]
+      
+      fn.plt.pred.lat.z.sx.size(D=Store.SEX.show.depth,varX="Z.seq",
+                                varY="Z.preds",REVRT="NO",CL=1:15,XLIM=c(0,250),YLIM=c(0,1))
+      mtext("Depth (m)",1,line=1.9,cex=1.5)
+      mtext("Probability of catching a male",2,0.75,outer=T,las=3,cex=1.65)
+      dev.off()
+      
+    }
+    
+    
+    
+    #---Size trends---
+    
+    #2. Effect of latitude on size   
+    #fixed stations
+    fn.fig("Paper/Figure 6",2400,2400)
+    par(mfcol=n2mfrow(N.species.size-sum(sapply(PRED.lat.size,is.null))),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
+    for(i in 1:N.species.size)
+    {
+      dummy=PRED.lat.size[[i]]
+      if(!is.null(dummy))
+      {
+        #names(dummy)[6:7]=c("lower.CL","upper.CL")
+        dummy=cbind(dummy,CV=NA)
+        dummy$yr=dummy$Mid.Lat
+        dummy$MEAN=dummy$emmean
+        dummy$UP=dummy$upper.CL
+        dummy$LOW=dummy$lower.CL
+        a=fun.plot.yr.pred(dummy,X="Mid.Lat",normalised="YES",REV="NO",n.seq=1,YLIM=NULL,XLIM=NULL,Type="polygon")
+        LGn=names(PRED.lat.size)[i]
+      }
+      
+      if(ADD.P=="YES")
+      {
+        dd1=as.data.frame(Store.size[[i]]$Signifcance)    
+        dd1=dd1[match("log.Mid.Lat",row.names(dd1)),]$'Pr(>Chi)'
+        P=NULL
+        if(dd1>=0.01 & dd1<0.05) P="*"
+        if(dd1>=0.001 & dd1<0.01) P="**"
+        if(dd1<0.001) P="***"
+        if(!is.null(P)) LGn=paste(LGn,P)
+      }
+      mtext(LGn,3,line=.05,cex=1.1)
+    }
+    mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
+    mtext(expression(paste("Latitude (",degree,"S)",sep="")),1,outer=T,line=0.5,cex=1.5)
+    dev.off()
+    
+    
+    #3. Effect of depth on size
+    #fixed stations
+    limX=c(20,200)
+    fn.fig("Paper/Figure 7",2400,2400)
+    par(mfcol=n2mfrow(N.species.size-sum(sapply(PRED.z.size,is.null))),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
+    for(i in 1:N.species.size)
+    {
+      dummy=PRED.z.size[[i]]
+      if(!is.null(dummy))
+      {
+        #names(dummy)[6:7]=c("lower.CL","upper.CL")
+        dummy=cbind(dummy,CV=NA)
+        dummy$yr=dummy$Mid.Lat
+        dummy$MEAN=dummy$emmean
+        dummy$UP=dummy$upper.CL
+        dummy$LOW=dummy$lower.CL
+        a=fun.plot.yr.pred(dummy,X="BOTDEPTH",normalised="YES",REV="NO",n.seq=10,YLIM=NULL,XLIM=limX,Type="polygon")
+        LGn=names(PRED.z.size)[i]
+      }
+      
+      if(ADD.P=="YES")
+      {
+        dd1=as.data.frame(Store.size[[i]]$Signifcance)    #add p values
+        dd1=dd1[match("log.BOTDEPTH",row.names(dd1)),]$'Pr(>Chi)'
+        P=NULL
+        if(dd1>=0.01 & dd1<0.05) P="*"
+        if(dd1>=0.001 & dd1<0.01) P="**"
+        if(dd1<0.001) P="***"
+        if(!is.null(P)) LGn=paste(LGn,P)
+      }
+      mtext(LGn,3,line=.05,cex=1.1)
+    }
+    mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
+    mtext("Depth (m)",1,outer=T,line=0.5,cex=1.5)
+    dev.off()
+    
+    
+    #4. Effect of time on size
+    #fixed stations 
+    INDEX.size=PRED.size
+    LimX=c(min(DATA.list$`Sandbar shark`$year),max(DATA.list$`Sandbar shark`$year))
+    fn.fig("Paper/Figure 5",2400,2400)
+    par(mfcol=n2mfrow(N.species.size),mai=c(.3,.38,.15,.25),oma=c(2,1.25,1,2),las=1,mgp=c(.04,.6,0))
+    for(i in 1:N.species.size)
+    {
+      dummy=PRED.size[[i]]
+      #names(dummy)[5:6]=c("lower.CL","upper.CL")
+      dummy$yr=dummy$Mid.Lat
+      dummy$MEAN=dummy$emmean
+      dummy$UP=dummy$upper.CL
+      dummy$LOW=dummy$lower.CL
+      dummy$CV=100*dummy$SE/dummy$MEAN
+      INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points")
+      
+      #add observed mean size and size at maturity
+      par(new = T)
+      Nml.size=fn.nmnl.size(dat=Store.size[[i]]$DAT,REL="NO")
+      with(Nml.size,plot(year+Plus, mean, pch=16, cex=1.25, col="grey70",axes=F,
+                         xlab=NA, ylab=NA,ylim=c(0,max(Nml.size$uppCL,na.rm=T)),xlim=LimX))
+      # with(Nml.size,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
+      suppressWarnings(with(Nml.size,arrows(x0=year+Plus, y0=lowCL,x1=year+Plus, y1=uppCL, 
+                                            code=3, angle=90, length=0.025, col="grey70")))
+      axis(side = 4,cex.axis=1.25)
+      abline(h=Fem.Size.Mat[[match(TARGETS.name[i],names(Fem.Size.Mat))]],col="grey40",lwd=1.5,lty=3)   
+      
+      
+      mtext(names(PRED.z.size)[i],3,line=.05,cex=1.1)
+    }
+    mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
+    mtext("Year",1,outer=T,line=0.5,cex=1.5)
+    plot.new()
+    legend('topright',c("standardised","nominal"),bty='n',cex=1.5,pch=19,col=c("black","grey70"))
+    mtext("Size (cm)",4,outer=T,line=0.5,cex=1.5,las=3,col="grey70")
+    dev.off()
+    
+    
+    
   }
-  mtext("Relative CPUE",2,outer=T,line=-0.5,cex=1.5,las=3)
-  mtext("Depth (m)",1,outer=T,line=0.5,cex=1.5)
-  dev.off()
- 
+   
+  do.report=FALSE
+  if(do.report)
+  {
+    #stacked area plot of top shark species by time
+    n=10
+    fn.stack.area=function(tops,DAT,NME)
+    {
+      topS=names(tops[1:n])
+      not.topS=names(tops[n+1:length(tops)])
+      a=subset(DAT,TYPE=="Elasmo" & !SPECIES%in%not.topS)
+      a$SPECIES=factor(a$SPECIES,levels=topS)
+      d.stacked.plot=aggregate(Number~SPECIES+year,a,sum)
+      d.stacked.plot=reshape(d.stacked.plot,v.names = "Number", idvar = "year",
+                             timevar = "SPECIES", direction = "wide")
+      d.stacked.plot[is.na(d.stacked.plot)]=0
+      CL=(rainbow(nrow(d.stacked.plot),start=0.45,end=0.9,alpha=0.95))
+      
+      fn.fig(NME,2400,2400)
+      par(mai=c(.8,.8,.5,.5),xpd=TRUE,mgp=c(2.5,.8,0),las=1)
+      stackpoly(d.stacked.plot[,2:ncol(d.stacked.plot)],stack=T,xaxlab=d.stacked.plot$year,
+                col=CL,border=1,ylab="Number of sharks",xlab="Year",cex.lab=2.25,cex.axis=1.35)
+      legend("top",substr(names(d.stacked.plot)[2:ncol(d.stacked.plot)],8,9),bty='n',fill=CL,
+             horiz=T,inset=c(0,-0.05),cex=1.125)
+      dev.off()
+      
+    }
+    
+    #Longlines
+    fn.stack.area(tops=rev(sort(table(subset(DATA,TYPE=="Elasmo")$SPECIES))),
+                  DAT=DATA,NME="Report/Stack.up.plot.report")
+    
+    #Droplines
+    fn.stack.area(tops=rev(sort(table(subset(DATA.DL,TYPE=="Elasmo")$SPECIES))),
+                  DAT=DATA.DL,NME="Report/Stack.up.plot.DL.report")
+    
+    #Map of shots and stations
+    fn.map.sht=function(d,NME)
+    {
+      fn.fig(NME,2400,2400)
+      par(mgp=c(1,.8,0))
+      plotMap(worldLLhigh, xlim= c(112,122),ylim=c(-26,-16.8),plt = c(.1, 1, 0.075, 1),
+              col="firebrick",tck = 0.025, tckMinor = 0.0125, xlab="",ylab="",axes=F)
+      box()
+      text(118,-22,("Western"),col="white", cex=3)
+      text(118,-23,("Australia"),col="white", cex=3)
+      points(d$Mid.Long,d$Mid.Lat,cex=2.5,col=rgb(.5,.5,.5,alph=0.075),pch=19)
+      with(Fixed.Stations[1:20,],points(Fix.St.mid.lon,Fix.St.mid.lat,pch=21,bg="white",cex=1.5))
+      with(Fixed.Stations[1:20,],text(Fix.St.mid.lon*0.999,Fix.St.mid.lat,Station.no.,pos=2,cex=1.5,col="dodgerblue4"))
+      mtext("Longitude (?E)",1,-1.5,outer=T,cex=2)
+      mtext("Latitude (?S)",2,line=-1.85,outer=T,cex=2)
+      axis(1,seq(112,120,2),seq(112,120,2),cex.axis=1.25)
+      axis(2,seq(-16,-26,-2),seq(16,26,2),las=1,cex.axis=1.25)
+      dev.off()
+      
+    }
+    #Longlines
+    fn.map.sht(d=D.map[!duplicated(D.map$SHEET_NO),],
+               NME="Report/Map.stations")
+    
+    #Droplines
+    fn.map.sht(d=DATA.DL[!duplicated(DATA.DL$SHEET_NO),],
+               NME="Report/Map.stations.DL")
+    
+    #Scalefish size distribution
+    Scale.size=a=subset(DATA,Taxa=="Teleost")
+    Tab.scl=sort(table(Scale.size$SPECIES))
+    Tab.scl=names(Tab.scl[Tab.scl>10])
+    fun.his=function(d)
+    {
+      d=subset(d,TL>0 | !is.na(TL))
+      NM=unique(d$COMMON_NAME)
+      hist(d$TL,ylab="",xlab="",col="grey60",main=NM,cex.main=1.5,cex.axis=1.25)
+      box()
+    }
+    fn.fig("Report/Scalefish.size.comp",2400,2400)
+    par(mfcol=n2mfrow(length(Tab.scl)),mai=c(.275,.15,.3,.3),oma=c(2.5,3.5,.1,.1),las=1,mgp=c(1,.6,0))
+    for(i in 1:length(Tab.scl))fun.his(d=subset(Scale.size,SPECIES==Tab.scl[i]))
+    mtext("Total length(cm)",1,0,outer=T,cex=1.5)
+    mtext("Frequency",2,1.5,outer=T,cex=1.5,las=3)
+    dev.off()
+    
+  }
+  
    
   #4. Effect of time on abundance
-    #fixed stations
+  #fixed stations
   INDEX=PRED.CPUE
   Plus=0.3
-  fn.fig("Paper/Figure 2",2400,2400)
-  par(mfcol=n2mfrow(N.species),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
-  LimX=c(min(DATA.list$`Sandbar shark`$year),max(DATA.list$`Sandbar shark`$year))
   for(i in Species.cpue)
   {
     Nml=fn.nmnl(dat=subset(DATA.list[[i]],FixedStation=="YES" & BOTDEPTH<210),REL="YES")
@@ -5034,21 +5269,14 @@ if(Do.abundance=="YES")
     #with(Nml,points(year+Plus, mean, "o", pch=16, lty=2, col="grey50"))
     with(Nml,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
     suppressWarnings(with(Nml,arrows(x0=year+Plus, y0=low95,x1=year+Plus, y1=up95, 
-           code=3, angle=90, length=0.025, col="grey70")))
+                                     code=3, angle=90, length=0.025, col="grey70")))
     mtext(Tar.names[i],3,line=.05,cex=1.1)
   }
-  mtext("Relative CPUE",2,outer=T,line=-0.5,cex=1.5,las=3)
-  mtext("Year",1,outer=T,line=0.5,cex=1.5)
-  plot.new()
-  legend('topright',c("standardised","nominal"),bty='n',cex=1.5,pch=19,col=c("black","grey70"))
-  dev.off()
-  
-  
-  #5. Export Sandbar and Dusky sharks index   
+
+  #5. Export abundance index   
       #Fixed stations
   hnd.indx=handl_OneDrive("Analyses/Data_outs/")
   for(i in 1:length(INDEX)) write.csv(INDEX[[i]],paste(hnd.indx,names(INDEX)[i],'/',names(INDEX)[i],".Srvy.FixSt.csv",sep=""),row.names=F)
-  
   
   
   #6. create dusky and sandbar figures for RAR
@@ -5085,170 +5313,11 @@ if(Do.abundance=="YES")
   legend('topleft',c("standardised","nominal"),bty='n',cex=1.25,pch=19,col=c("black","grey70"))
   dev.off()
   
-
   
-  #---Sex ratio trends---
-  if(do.sex.ratio=="YES")
-  {
-    #fixed stations
-    fn.fig("Paper/Prop_male_year",2000,2400)
-    par(mfcol=c(5,3),mai=c(.3,.38,.01,.1),oma=c(3,1.25,2,.1),las=1,mgp=c(.04,.6,0))
-    for(i in 1:N.species.sex)
-    {
-      fun.plot.yr.pred.arrows.size(BOOTS=STORE.BOOT.sex[[i]],normalised="NO")
-      mtext(names(STORE.BOOT.sex)[i],3,line=.05,cex=1.1)
-    }
-    mtext("Proportion of males",2,outer=T,line=-0.5,cex=1.75,las=3)
-    mtext("Year",1,outer=T,line=1,cex=1.75)
-    dev.off()
-    
-
-    #Anova tables
-    TABL.sex=vector('list',length(Store.SEX))
-    names(TABL.sex)=names(Store.SEX)
-    for (i in 1:N.species.sex) TABL.sex[[i]]=fn.anova.table(Store.SEX[[i]])
-    TABL.sex=do.call(cbind,TABL.sex)
-    TABL.sex=cbind(Terms=rownames(TABL.sex),TABL.sex)
-    write.csv(TABL.sex,"Paper/Anovas/TABL.sex.csv",row.names=F)
-    
-    #Depth and latitude trends
-    #select species for which depth or latitude are significant
-    depth.sp=c("Blacktip sharks","Scalloped hammerhead",
-               "Great hammerhead","Pigeye shark","Lemon shark")	
-    Lat.sp=c("Sandbar shark","Milk shark","Blacktip sharks","Pigeye shark")
-    fn.fig("Paper/Depth_Lat_effect_prop_male",2000,2400)
-    par(mfcol=c(2,1),mai=c(.3,.3,.3,.1),oma=c(2,2,.3,.1),mgp=c(2.5, .5, 0),las=1)
-    
-    #Proportion of males changes with latitude
-    Store.SEX.show.lat=Store.SEX[match(Lat.sp,names(Store.SEX))]
-    fn.plt.pred.lat.z.sx.size(D=Store.SEX.show.lat,varX="LAT.seq",
-                              varY="LAT.preds",REVRT="YES",CL=1:15,XLIM=c(17,25),YLIM=c(0,1))
-    mtext("Latitude (?S)",1,line=1.9,cex=1.5)
-    
-    #Proportion of males changes with depth
-    Store.SEX.show.depth=Store.SEX[match(depth.sp,names(Store.SEX))]
-    
-    fn.plt.pred.lat.z.sx.size(D=Store.SEX.show.depth,varX="Z.seq",
-                              varY="Z.preds",REVRT="NO",CL=1:15,XLIM=c(0,250),YLIM=c(0,1))
-    mtext("Depth (m)",1,line=1.9,cex=1.5)
-    mtext("Probability of catching a male",2,0.75,outer=T,las=3,cex=1.65)
-    dev.off()
-    
-  }
-  
-  
-  
-  #---Size trends---
-  
-  #2. Effect of latitude on size   
-    #fixed stations
-  fn.fig("Paper/Figure 6",2400,2400)
-  par(mfcol=n2mfrow(N.species.size-sum(sapply(PRED.lat.size,is.null))),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
-  for(i in 1:N.species.size)
-  {
-    dummy=PRED.lat.size[[i]]
-    if(!is.null(dummy))
-    {
-      #names(dummy)[6:7]=c("lower.CL","upper.CL")
-      dummy=cbind(dummy,CV=NA)
-      dummy$yr=dummy$Mid.Lat
-      dummy$MEAN=dummy$emmean
-      dummy$UP=dummy$upper.CL
-      dummy$LOW=dummy$lower.CL
-      a=fun.plot.yr.pred(dummy,X="Mid.Lat",normalised="YES",REV="NO",n.seq=1,YLIM=NULL,XLIM=NULL,Type="polygon")
-      LGn=names(PRED.lat.size)[i]
-    }
-    
-    if(ADD.P=="YES")
-    {
-      dd1=as.data.frame(Store.size[[i]]$Signifcance)    
-      dd1=dd1[match("log.Mid.Lat",row.names(dd1)),]$'Pr(>Chi)'
-      P=NULL
-      if(dd1>=0.01 & dd1<0.05) P="*"
-      if(dd1>=0.001 & dd1<0.01) P="**"
-      if(dd1<0.001) P="***"
-      if(!is.null(P)) LGn=paste(LGn,P)
-    }
-    mtext(LGn,3,line=.05,cex=1.1)
-  }
-  mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
-  mtext(expression(paste("Latitude (",degree,"S)",sep="")),1,outer=T,line=0.5,cex=1.5)
-  dev.off()
-  
-  
-  #3. Effect of depth on size
-    #fixed stations
-  limX=c(20,200)
-  fn.fig("Paper/Figure 7",2400,2400)
-  par(mfcol=n2mfrow(N.species.size-sum(sapply(PRED.z.size,is.null))),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
-  for(i in 1:N.species.size)
-  {
-    dummy=PRED.z.size[[i]]
-    if(!is.null(dummy))
-    {
-      #names(dummy)[6:7]=c("lower.CL","upper.CL")
-      dummy=cbind(dummy,CV=NA)
-      dummy$yr=dummy$Mid.Lat
-      dummy$MEAN=dummy$emmean
-      dummy$UP=dummy$upper.CL
-      dummy$LOW=dummy$lower.CL
-      a=fun.plot.yr.pred(dummy,X="BOTDEPTH",normalised="YES",REV="NO",n.seq=10,YLIM=NULL,XLIM=limX,Type="polygon")
-      LGn=names(PRED.z.size)[i]
-    }
-    
-    if(ADD.P=="YES")
-    {
-      dd1=as.data.frame(Store.size[[i]]$Signifcance)    #add p values
-      dd1=dd1[match("log.BOTDEPTH",row.names(dd1)),]$'Pr(>Chi)'
-      P=NULL
-      if(dd1>=0.01 & dd1<0.05) P="*"
-      if(dd1>=0.001 & dd1<0.01) P="**"
-      if(dd1<0.001) P="***"
-      if(!is.null(P)) LGn=paste(LGn,P)
-    }
-    mtext(LGn,3,line=.05,cex=1.1)
-  }
-  mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
-  mtext("Depth (m)",1,outer=T,line=0.5,cex=1.5)
-  dev.off()
-  
-  
-  #4. Effect of time on size
-    #fixed stations 
-  fn.nmnl.size=function(dat,REL)
-  {
-    d = dat %>%
-      mutate(year=as.numeric(as.character(year)))%>%
-      group_by(year) %>%
-      summarise(n = length(FL),
-                mean = mean(FL),
-                sd = sd(FL),
-                se = sd/(sqrt(n)),
-                lowCL= mean-1.96*se,
-                uppCL= mean+1.96*se) %>%
-      as.data.frame
-    
-    if(REL=="YES")
-    {
-      Mn=mean(d$mean,na.rm=T)
-      d$mean=d$mean/Mn
-      d$low95=d$lowCL/Mn
-      d$up95=d$uppCL/Mn
-    }
-    all.yrs=seq(YEAR[1],d$year[length(d$year)])
-    msn.yr=all.yrs[which(!all.yrs%in%d$year)]  
-    msn.yr.dummy=d[1:length(msn.yr),]
-    msn.yr.dummy[,]=NA
-    msn.yr.dummy$year=msn.yr
-    d=rbind(d,msn.yr.dummy)
-    d=d[order(d$year),]
-    return(d)
-  }
+  #7. Effect of time on size
+  #fixed stations 
   INDEX.size=PRED.size
-  LimX=c(min(DATA.list$`Sandbar shark`$year),max(DATA.list$`Sandbar shark`$year))
-  fn.fig("Paper/Figure 5",2400,2400)
-  par(mfcol=n2mfrow(N.species.size),mai=c(.3,.38,.15,.25),oma=c(2,1.25,1,2),las=1,mgp=c(.04,.6,0))
-  for(i in 1:N.species.size)
+   for(i in 1:N.species.size)
   {
     dummy=PRED.size[[i]]
     #names(dummy)[5:6]=c("lower.CL","upper.CL")
@@ -5266,28 +5335,20 @@ if(Do.abundance=="YES")
                        xlab=NA, ylab=NA,ylim=c(0,max(Nml.size$uppCL,na.rm=T)),xlim=LimX))
     # with(Nml.size,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
     suppressWarnings(with(Nml.size,arrows(x0=year+Plus, y0=lowCL,x1=year+Plus, y1=uppCL, 
-                                     code=3, angle=90, length=0.025, col="grey70")))
+                                          code=3, angle=90, length=0.025, col="grey70")))
     axis(side = 4,cex.axis=1.25)
     abline(h=Fem.Size.Mat[[match(TARGETS.name[i],names(Fem.Size.Mat))]],col="grey40",lwd=1.5,lty=3)   
     
     
     mtext(names(PRED.z.size)[i],3,line=.05,cex=1.1)
   }
-  mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
-  mtext("Year",1,outer=T,line=0.5,cex=1.5)
-  plot.new()
-  legend('topright',c("standardised","nominal"),bty='n',cex=1.5,pch=19,col=c("black","grey70"))
-  mtext("Size (cm)",4,outer=T,line=0.5,cex=1.5,las=3,col="grey70")
-  dev.off()
-  
-  
-  #5. Export Sandbar and Dusky sharks index   
+ 
+  #8. Export size index   
     #Fixed stations
   for(i in 1:length(INDEX.size)) write.csv(INDEX.size[[i]],paste(hnd.indx,names(INDEX.size)[i],'/',names(INDEX)[i],".Srvy.FixSt_size.csv",sep=""),row.names=F)
   
 
-  
-  #6. create dusky and sandbar figures for RAR
+  #9. create dusky and sandbar figures for RAR
     #fixed stations
   San.dusky.species=match(c("Sandbar shark","Dusky shark"),names(INDEX.size))
   fn.fig("Paper/Figure 5_sandbar_dusky",1200,2400)
