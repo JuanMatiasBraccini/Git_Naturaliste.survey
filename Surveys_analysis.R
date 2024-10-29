@@ -1,5 +1,7 @@
 ####   SCRIPT FOR ANALYSING NATURALISTE SURVEY DATA ####
 
+#VIP: Consider issue of depredation, have heads always been recorded for cpue??
+
 # INDEX :
 # -- DATA SECTION --
 # -- CONTROL SECTION --
@@ -23,14 +25,16 @@
 #         Zero inflated and Hurdle model don't produce SE for predictions,
 #         hence, did Monte Carlo or bootstrapping
 
-
+#         For each new year, in 'Source_Shark_bio.R' manually subtract lost hooks and add lost fish
 
 # DATA SECTION ------------------------------------------------------------
 
 #Define user
 User="Matias"
 
-if(!exists('handl_OneDrive')) source('C:/Users/myb/OneDrive - Department of Primary Industries and Regional Development/Matias/Analyses/SOURCE_SCRIPTS/Git_other/handl_OneDrive.R')
+fn.user=function(x1,x2)paste(x1,Sys.getenv("USERNAME"),x2,sep='/')
+if(!exists('handl_OneDrive')) source(fn.user(x1='C:/Users',
+                                             x2='OneDrive - Department of Primary Industries and Regional Development/Matias/Analyses/SOURCE_SCRIPTS/Git_other/handl_OneDrive.R'))
 
 
 #Sharks data base 
@@ -42,13 +46,13 @@ library(ggplot2)
 library(vcd)    #correlation between factors
 library(pscl)  #zero-inflated models
 library(MCMCglmm) #zero-inflated models
-library(glmmADMB) #zero-inflated models
+#library(glmmADMB) #zero-inflated models
 library(tweedie)
 library(statmod) # Provides  tweedie  family functions
 library(bbmle)  #AIC table
 library(lmtest) #likelihood ratio tests
 library(mgcv)
-library(zigam)
+#library(zigam)
 library(PBSmapping)
 data(worldLLhigh)
 library(plotrix) #multihistogram
@@ -57,7 +61,7 @@ library(gplots)  #annotated boxplot
 #library(COZIGAM)
 library(mvtnorm)      #for multivariate normal pdf
 library(caret)
-library(ReporteRs)
+#library(ReporteRs)
 library(gridExtra)
 #library(cede)
 library(tidyr)
@@ -67,9 +71,8 @@ library(glmulti)  #model selection
 library(emmeans)
 library(foreach)
 library(doParallel)
-library(geosphere)
 library(imputeTS)
-
+library(ggrepel)
 
 #install.packages("countreg", repos = "http://R-Forge.R-project.org")
 #see great vignette: https://cran.r-project.org/web/packages/pscl/vignettes/countreg.pdf
@@ -105,6 +108,7 @@ South.lat.bound=with(Fixed.Stations,min(c(Lat.1,Lat.2)))
 North.lat.bound=with(Fixed.Stations,max(c(Lat.1,Lat.2)))
 West.lon.bound=with(Fixed.Stations,min(c(Long.1,Long.2)))
 East.lon.bound=with(Fixed.Stations,max(c(Long.1,Long.2)))
+Tolerance=1  #1 degree
 
 #Southern Oscillation Index
 SOI=read.csv(handl_OneDrive("Data/Oceanography/SOI.csv"))
@@ -181,7 +185,7 @@ Max.depth=3  #(in metres)
 
 
 
-# Output scalefish size data for Jef Norris -------------------------------------------------------
+# Output scalefish size data for Jeff Norris -------------------------------------------------------
 do.Jeff=FALSE
 if(do.Jeff)
 {
@@ -333,8 +337,107 @@ if(do.ham.spatial)
   Tab.hh.sp=round(Tab.hh.sp/sum(Tab.hh.sp),2)
   
 }
-
-
+# Check Spatial hot spots -------------------------------------------------------
+fn.spatial.hotspots.raw.cpue=function(d,nobs)
+{
+  Top.spisis=d%>%
+    group_by(COMMON_NAME)%>%
+    tally()%>%
+    filter(n>=nobs)
+  d=d%>%
+    filter(COMMON_NAME%in%Top.spisis$COMMON_NAME)
+  d.ktch=d%>%
+    group_by(SHEET_NO,Mid.Lat,Mid.Long,year,COMMON_NAME)%>%
+    tally()
+  
+  d.effort=d%>%
+    mutate(Effort=N.hooks*SOAK.TIME)%>%
+    group_by(SHEET_NO)%>%
+    summarise(Effort=max(Effort,na.rm=T))
+  
+  d.cpue=left_join(d.ktch,d.effort,by='SHEET_NO')%>%
+    filter(!is.infinite(Effort))%>%
+    mutate(cpue=n/Effort)
+  
+  p1=d.cpue%>%
+    group_by(Mid.Lat,Mid.Long,COMMON_NAME)%>%
+    summarise(cpue=mean(cpue))%>%
+    ungroup()%>%
+    ggplot(aes(Mid.Long,Mid.Lat))+
+    geom_point(aes(size=cpue),color='steelblue',alpha=0.3)+
+    facet_wrap(~COMMON_NAME)+
+    geom_text_repel(data=Fixed.Stations%>%filter(Station.no.%in%1:20),
+                    aes(Fix.St.mid.lon,Fix.St.mid.lat,label = Station.no.),
+                    nudge_x = .6,nudge_y = -1,size = 2,angle=0)+
+    theme(legend.position = 'top')
+  print(p1)
+  ggsave(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance/density_main_sp/hot spots main species.tiff"),
+         width = 11,height = 8,compression = "lzw")
+  
+  nn=sort(unique(d.cpue$COMMON_NAME))
+  pdf(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance/density_main_sp/hot spots main species.pdf"))
+  for(i in 1:length(nn))
+  {
+    p=d.cpue%>%
+      filter(COMMON_NAME==nn[i])%>%
+      group_by(year,Mid.Lat,Mid.Long,COMMON_NAME)%>%
+      summarise(cpue=mean(cpue))%>%
+      ungroup()%>%
+      ggplot(aes(Mid.Long,Mid.Lat))+
+      geom_point(aes(size=cpue),color='steelblue',alpha=0.3)+
+      facet_wrap(~year)+
+      geom_text_repel(data=Fixed.Stations%>%filter(Station.no.%in%1:20),
+                      aes(Fix.St.mid.lon,Fix.St.mid.lat,label = Station.no.),
+                      nudge_x = .6,nudge_y = -1,size = 2,angle=0)+
+      theme(legend.position = 'top')+
+      ggtitle(nn[i])
+    print(p)
+  }
+  dev.off()
+  
+}
+fn.spatial.hotspots.raw.cpue(d=DATA%>%
+                               filter(Mid.Lat>(-26) & Method=='LL')%>%
+                               filter(BOAT%in%c('NAT')),
+                             nobs=40)
+# Check new year of Survey -------------------------------------------------------
+check.new.years.Nat.survey=FALSE
+if(check.new.years.Nat.survey)
+{
+  Current.yr=2023
+  di=DATA%>%
+    filter(Mid.Lat>(-26) & Method=='LL')%>%
+    filter(BOAT%in%c('NAT'))
+  #table(di$COMMON_NAME,di$year,useNA = 'ifany')
+  di%>%
+    filter(year==Current.yr)%>%
+    distinct(SPECIES,COMMON_NAME,COMMENTS,COMMENTS.hdr,NewComments)%>%arrange(NewComments)
+  dis.sp=c("Sandbar shark",                "Milk shark"   ,               
+           "Spot-tail shark"  ,            "Tiger shark" ,                
+           "Blacktip sharks" ,             "Dusky shark"  ,               
+           "Scalloped hammerhead"   ,      "Sliteye shark" ,              
+           "Great hammerhead" ,            "Silvertip shark" ,            
+           "Pigeye shark"  ,               "Whitespot guitarfish"  ,      
+           "Lemon shark" ,                 "Grey reef shark" ,            
+           "Zebra shark" ,                 "Guitarfish & shovelnose rays",
+           "Bignose shark",                "Tawny nurse shark" )
+  di%>%
+    filter(COMMON_NAME%in%dis.sp)%>% 
+    mutate(Effort=N.hooks*SOAK.TIME)%>%
+    group_by(year)%>%
+    mutate(Effort=max(Effort,na.rm=T))%>%
+    ungroup()%>%
+    group_by(year,SPECIES,COMMON_NAME)%>%
+    mutate(N=sum(Number,na.rm=T))%>%
+    ungroup()%>%
+    mutate(cpue=N/Effort)%>%
+    distinct(year,SPECIES,COMMON_NAME,cpue,Effort,N)%>%
+    ggplot(aes(year,cpue))+
+    geom_point()+
+    facet_wrap(~COMMON_NAME,scales='free_y')+
+    xlim(2000,2023)
+  
+}
 # PROCEDURE SECTION -------------------------------------------------------
 
 #Check size distribution by gear
@@ -359,6 +462,21 @@ fn.check.size.gr(SPEC='WH')
 drop=c("MESH_SIZE","MESH_DROP","NET_LENGTH")
 DATA=DATA[,-match(drop,names(DATA))]
 
+#Data for Agustin Parks 2025
+do.this=FALSE
+if(do.this)
+{
+  Agus.DATA=DATA%>%
+    filter(Taxa=='Elasmobranch')%>%
+    filter(!SPECIES=='XX')%>%
+    mutate(Mid.Lat=-abs(Mid.Lat))%>%
+    group_by(CAAB_code,COMMON_NAME,SCIENTIFIC_NAME,year,Month,Method,Mid.Lat,Mid.Long,BOTDEPTH,TL,SEX)%>%
+    summarise(Numbers=sum(Numbers))%>%
+    ungroup()%>%
+    rename(Latitude=Mid.Lat,
+           Longitude=Mid.Long)
+  write.csv(Agus.DATA,handl_OneDrive('Parks Australia/2025_project/Data/Data sets/WA/Observers.csv'),row.names = F)
+}
 
 #Select boats (scientific survey only) within Fixed stations area
 Boats=c("NAT","HOU","HAM","FLIN")   
@@ -366,17 +484,17 @@ Boats=c("NAT","HOU","HAM","FLIN")
 #Drop non-longline methods
 Drop.methods=c("GN","Mandy J","TW","DL")
 
-#Select data for survevys in northwestern WA 
+#Select data for surveys in northwestern WA 
 DATA=subset(DATA,BOAT%in%Boats & N.hooks>=0  &
-              END1LATD>(South.lat.bound-.5) & END1LATD<(North.lat.bound+.5) &
-              END1LNGD>(West.lon.bound-.5) & END1LNGD<(East.lon.bound+.5) )   
+              END1LATD>(South.lat.bound-Tolerance) & END1LATD<(North.lat.bound+Tolerance) &
+              END1LNGD>(West.lon.bound-Tolerance) & END1LNGD<(East.lon.bound+Tolerance) )   
 
 
 #Add Freo and SOI
 DATA=merge(DATA,SOI, by.x=c("Month","year"),by.y=c("Month","Year"),all.x=T)
 DATA=merge(DATA,Freo, by.x=c("Month","year"),by.y=c("Month","Year"),all.x=T)
 
-#remove Gummy, missindentification
+#remove Gummy, miss indentification
 DATA=subset(DATA,!SPECIES%in%c("GM","CO"))
 
 #remove unidentified species
@@ -486,7 +604,7 @@ Table.1.DL=merge(DL.species$Table.species,DL.size,by="SPECIES")
 names(Table.1.DL)[-ID]=paste("DL.",names(Table.1.DL)[-ID],sep="")
 
 Table.1=merge(Table.1.LL,Table.1.DL,by="SPECIES",all=T)
-Table.1=merge(SPECIES.names,Table.1,by.x="Species",by.y="SPECIES",all.y=T) #ACA
+Table.1=merge(SPECIES.names,Table.1,by.x="Species",by.y="SPECIES",all.y=T) 
 Table.1=Table.1[order(Table.1$LL.Cum.Percent,-Table.1$LL.Numbers),]
 Table.1[is.na(Table.1)]=""
 names(Table.1)[match("LL.Numbers",names(Table.1))]=paste("LL.Numbers_",Yrs.LL[1],"-",Yrs.LL[length(Yrs.LL)],sep="")
@@ -513,6 +631,19 @@ Table.1.scalies[is.na(Table.1.scalies)]=""
 N.droplines=length(unique(DATA.DL$SHEET_NO))
 N.longlines=length(unique(DATA$SHEET_NO))
 
+#Plot shot location and station by year
+do.dis=FALSE
+if(do.dis)
+{
+  DATA%>%
+    distinct(SHEET_NO,.keep_all = T)%>%
+    ggplot(aes(Mid.Long,Mid.Lat))+geom_point(alpha=0.5,col=2,size=3)+
+    facet_wrap(~year,ncol=4)+
+    geom_point(data=Fixed.Stations[1:20,],aes(Fix.St.mid.lon,Fix.St.mid.lat))+
+    geom_text_repel(data=Fixed.Stations[1:20,],aes(Fix.St.mid.lon,Fix.St.mid.lat,label = Station.no.),
+                    nudge_x = .6,nudge_y = -1,size = 3,angle=0)
+  ggsave("shot location and station by year.tiff",width = 8,height = 10,compression = "lzw")
+}
 
 #Create useful vars
 YEAR=sort(unique(DATA$year))
@@ -605,7 +736,7 @@ Fixed.only=subset(UniC,FixedStation=="YES")
 Fixed.only=unique(Fixed.only$date)
 DATA$FixedStation=with(DATA,ifelse(date%in%Fixed.only,"YES",FixedStation))
 
-#Set additional stations to non-fixed as only a few years revisited
+#Set "additional station" to 'not fixed' station as only a few years revisited   
 DATA$FixedStation=with(DATA,ifelse(!Station.no.%in%as.character(1:20),"NO",FixedStation))
 
 
@@ -893,7 +1024,7 @@ if(Do.abundance=="YES")
               "TEMP1.bin","Temp.res","Mid.Lat.bin",
               "N.hooks.Fixed","SOAK.TIME","Method","FixedStation","Station.no.")
   
-  #1.6    Construct wide database for analysis
+  #1.6    Construct wide database for analysis  
   Effort.data.fun=function(target,SUBSET)
   {
     #remove record if no effort data or outside distribution
@@ -902,6 +1033,7 @@ if(Do.abundance=="YES")
                                   Month%in%These.Months & Set.time <"08:00" & !(year==2004))
     DAT=subset(DAT,!is.na(SPECIES))
     
+    DAT=subset(DAT,year>2001)  #only 1 shot done during May:August in 2001
     #target species catch 
     DAT$Catch.Target=with(DAT,ifelse(SPECIES==target,Number,0))
     
@@ -920,6 +1052,11 @@ if(Do.abundance=="YES")
     
     DAT1=DAT[!duplicated(DAT$SHEET_NO),match(THESEVARS,names(DAT))]
     TABLE=merge(TABLE,DAT1,by="SHEET_NO",all.x=TRUE)
+    
+    #remove shots with no catch due to baitless hooks
+    baitless=DAT[grep('baitless',tolower(DAT$COMMENTS.hdr)),]%>%
+      filter(grepl('all hooks',tolower(COMMENTS.hdr)))
+    if(nrow(baitless)>0)TABLE=TABLE%>%filter(!SHEET_NO%in%baitless$SHEET_NO)  
     
     #proportion of records with target catch
     prop.with.catch=round(100*sum(TABLE$Catch.Target>0)/length(TABLE$Catch.Target),0)
@@ -2970,6 +3107,8 @@ if(Do.abundance=="YES")
                                      Offset),collapse="+"),sep="~"))
     BEST.model$'Sliteye shark'=formula(paste(Res.var,paste(c("year",
                                 "s(BOTDEPTH,k=3)",Offset),collapse="+"),sep="~"))   
+    BEST.model$'Silvertip shark'=BEST.model$'Sliteye shark'
+    
     ERROR.st=BEST.model
     for(i in 1:N.species)ERROR.st[[i]]="NB"
   }
@@ -3016,7 +3155,7 @@ if(Do.abundance=="YES")
       if(sum(used.term)>0)
       {
         Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
-        Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.1))))
+        Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.5))))
       }
       
       Depth.pred=NULL
@@ -3538,7 +3677,7 @@ if(Do.abundance=="YES")
     Biom.Vec <- c(LOW1, tail(UP1, 1), rev(UP1), LOW1[1])
     polygon(Year.Vec, Biom.Vec, col = Colr, border = Colr2)
   }
-  fun.plot.yr.pred=function(PRD,X,normalised,REV,n.seq,YLIM,XLIM,Type)
+  fun.plot.yr.pred=function(PRD,X,normalised,REV,n.seq,YLIM,XLIM,Type,pLOT=FALSE)
   {
     THIS=match(X,names(PRD))
     if(X=="BOTDEPTH")
@@ -3560,7 +3699,7 @@ if(Do.abundance=="YES")
     MeAn=PRD$MEAN
     UppCI=PRD$UP
     LowCI=PRD$LOW
-    dat.plt=data.frame(yr=yr,MeAn=MeAn,UppCI=UppCI,LowCI=LowCI,CV=PRD$CV)
+    dat.plt=data.frame(yr=yr,MeAn=MeAn,UppCI=UppCI,LowCI=LowCI,CV=PRD$CV,SE=PRD$SE)
     #add missing years
     if(X=="year")
     {
@@ -3577,24 +3716,28 @@ if(Do.abundance=="YES")
     if(is.null(YLIM))YLIM=c(0,max(dat.plt$UppCI,na.rm=T))
     if(YLIM[2]>1e5) YLIM[2]=quantile(dat.plt$UppCI,0.5)
     if(is.null(XLIM)) XLIM=range(dat.plt[,1])
-    if(Type=="points")
+    if(pLOT)
     {
-      with(dat.plt,plot(yr,MeAn,pch=19,main="",xlab="",ylab="",
-                        cex=1.25,xaxt="n",cex.axis=1.25,ylim=YLIM,xlim=XLIM))
-      suppressWarnings(with(dat.plt,arrows(x0=yr, y0=LowCI, x1=yr, y1=UppCI,code = 3,angle=90,length=.025)))
+      if(Type=="points")
+      {
+        with(dat.plt,plot(yr,MeAn,pch=19,main="",xlab="",ylab="",
+                          cex=1.25,xaxt="n",cex.axis=1.25,ylim=YLIM,xlim=XLIM))
+        suppressWarnings(with(dat.plt,arrows(x0=yr, y0=LowCI, x1=yr, y1=UppCI,code = 3,angle=90,length=.025)))
+      }
+      if(Type=="polygon")
+      {
+        with(dat.plt,plot(yr,MeAn,type='l',main="",xlab="",ylab="",
+                          lwd=2,xaxt="n",cex.axis=1.25,ylim=YLIM,xlim=XLIM))
+        with(dat.plt,CI.fun(yr,UppCI,LowCI,"grey80","transparent"))
+        with(dat.plt,lines(yr,MeAn,type='l',lwd=2))
+      }
+      axis(1,seq(XLIM[1],XLIM[2],n.seq),seq(XLIM[1],XLIM[2],n.seq),tck=-0.04,cex.axis=1.25)
+      if(n.seq<10)axis(1,seq(XLIM[1],XLIM[2],1),F,tck=-0.02,cex.axis=1.25)
+      #with(dat.plt,axis(1,yr,F,tck=-0.025))
+      #with(dat.plt,axis(1,seq(yr[1],yr[length(yr)],n.seq),F,tck=-0.05))
+      #with(dat.plt,axis(1,seq(yr[1],yr[length(yr)],n.seq),seq(yr[1],yr[length(yr)],n.seq),tck=-0.05,cex.axis=1.25))
+      
     }
-    if(Type=="polygon")
-    {
-      with(dat.plt,plot(yr,MeAn,type='l',main="",xlab="",ylab="",
-                        lwd=2,xaxt="n",cex.axis=1.25,ylim=YLIM,xlim=XLIM))
-      with(dat.plt,CI.fun(yr,UppCI,LowCI,"grey80","transparent"))
-      with(dat.plt,lines(yr,MeAn,type='l',lwd=2))
-    }
-    axis(1,seq(XLIM[1],XLIM[2],n.seq),seq(XLIM[1],XLIM[2],n.seq),tck=-0.04,cex.axis=1.25)
-    if(n.seq<10)axis(1,seq(XLIM[1],XLIM[2],1),F,tck=-0.02,cex.axis=1.25)
-    #with(dat.plt,axis(1,yr,F,tck=-0.025))
-    #with(dat.plt,axis(1,seq(yr[1],yr[length(yr)],n.seq),F,tck=-0.05))
-    #with(dat.plt,axis(1,seq(yr[1],yr[length(yr)],n.seq),seq(yr[1],yr[length(yr)],n.seq),tck=-0.05,cex.axis=1.25))
     return(dat.plt)
   }
  
@@ -3798,7 +3941,7 @@ if(Do.abundance=="YES")
     Store.size[[i]]=Size.fun(dat,FORMULA=BEST.model.size[[i]])
   }
     
-  #Goodnes of fit 
+  #Goodness of fit 
   Pos.Diag.fn=function(MODEL,M=1)   #function for fit diagnostics
   {
     RES=MODEL$residuals   #residuals
@@ -3845,6 +3988,15 @@ if(Do.abundance=="YES")
 }
 
 # 2. Multivariate analysis and Ecosystem indicators   MISSING:  USE Fixed Stations only! ----------------------------------------------------------------------
+#note: could use FL or TL to see ontogenetic effects (e.g. good size range for duskies, size range other species??)
+#    consider manyglm instead of adonis
+working='online'
+if(working=='offline')
+{
+  #write.csv(DATA,"C:/Users/myb/OneDrive - Department of Primary Industries and Regional Development/Desktop/multivariate data/DATA.csv",row.names = F)
+  DATA=read.csv('C:/Users/myb/OneDrive - Department of Primary Industries and Regional Development/Desktop/multivariate data/DATA.csv')
+}
+##
 if(Do.multivariate=="YES")
 {
   hndl.eco=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Ecosystems/")
@@ -3939,7 +4091,7 @@ if(Do.multivariate=="YES")
   #         should have blocks rathen than lat? if so, then depth nested in block?
   if(Do.multivariate=="YES")   
   {
-    source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Multivariate_statistics.R"))
+    source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Multivariate_statistics.R"))
     DataSets=c("catch","cpue","proportion")   #response variables
     IDVAR=c("year","BOTDEPTH.mean","Mid.Lat.mean","Effort.statn_year")
     STore.multi.var.trad=Multivar.fn(DATA=Numbers.Station.year,ResVar=ResVar,MultiVar=MultiVar,
@@ -4039,10 +4191,10 @@ if(Do.multivariate=="YES")
     require(asbio)
     
     #Function for calculating Diversity indices and Ecosystem indicators
-    source(handl_OneDrive("Analyses/Ecosystem indices/Shark-bycatch/Git_bycatch_TDGDLF/Ecosystem_functions.R"))
+    source(handl_OneDrive("Analyses/Ecosystem indices and multivariate/Git_ecosy.and.mutivariate/Ecosystem_functions.R"))
     
     #add trophic level
-    TL=read.csv(handl_OneDrive("Analyses/Ecosystem indices/Shark-bycatch/SPECIES+PCS+FATE.csv"),stringsAsFactors=F)
+    TL=read.csv(handl_OneDrive("Analyses/Ecosystem indices and multivariate/Shark-bycatch/SPECIES+PCS+FATE.csv"),stringsAsFactors=F)
     DATA.eco=merge(DATA.eco,subset(TL,select=c(SPECIES,TROPHIC_LEVEL)),by="SPECIES",all.x=T)
     
     #balance desing
@@ -4439,13 +4591,13 @@ if(Do.multivariate=="YES")
 }
 
 
-# REPORT_CATCH RATES FROM FISHERY INDEPENDENT SURVEYS----------------------------------------------------------------------
+# REPORT_Outputs abundance paper----------------------------------------------------------------------
 if(Do.abundance=="YES")
 {
   setwd(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance"))
   
   do.paper=FALSE
-  
+  LimX=c(min(DATA.list$`Sandbar shark`$year),max(DATA.list$`Sandbar shark`$year))
   if(do.paper)
   {
     #Table 1
@@ -4960,7 +5112,7 @@ if(Do.abundance=="YES")
     Plus=0.3
     fn.fig("Paper/Figure 2",2400,2400)
     par(mfcol=n2mfrow(N.species),mai=c(.3,.38,.15,.1),oma=c(2,1.25,1,.1),las=1,mgp=c(.04,.6,0))
-    LimX=c(min(DATA.list$`Sandbar shark`$year),max(DATA.list$`Sandbar shark`$year))
+    
     for(i in Species.cpue)
     {
       Nml=fn.nmnl(dat=subset(DATA.list[[i]],FixedStation=="YES" & BOTDEPTH<210),REL="YES")
@@ -5244,10 +5396,11 @@ if(Do.abundance=="YES")
   }
   
    
-  #4. Effect of time on abundance
+  #4. Effect of time on abundance  
   #fixed stations
   INDEX=PRED.CPUE
   Plus=0.3
+  INDEX.absolute=INDEX
   for(i in Species.cpue)
   {
     Nml=fn.nmnl(dat=subset(DATA.list[[i]],FixedStation=="YES" & BOTDEPTH<210),REL="YES")
@@ -5259,11 +5412,14 @@ if(Do.abundance=="YES")
     dummy$MEAN=dummy$emmean
     dummy$UP=dummy$upper.CL
     dummy$LOW=dummy$lower.CL
-    dummy$CV=100*dummy$SE/dummy$MEAN
+    dummy$CV=dummy$SE/dummy$MEAN
     
     MaX=max(c(dummy$UP/mean(dummy$MEAN),Nml$up95),na.rm=T)
     
-    INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,YLIM=c(0,MaX),XLIM=LimX,Type="points")
+    INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,
+                                YLIM=c(0,MaX),XLIM=LimX,Type="points",pLOT=TRUE)
+    INDEX.absolute[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="NO",REV="NO",n.seq=5,
+                                         YLIM=c(0,MaX),XLIM=LimX,Type="points",pLOT=FALSE)
     
     #add nominal
     #with(Nml,points(year+Plus, mean, "o", pch=16, lty=2, col="grey50"))
@@ -5276,7 +5432,8 @@ if(Do.abundance=="YES")
   #5. Export abundance index   
       #Fixed stations
   hnd.indx=handl_OneDrive("Analyses/Data_outs/")
-  for(i in 1:length(INDEX)) write.csv(INDEX[[i]],paste(hnd.indx,names(INDEX)[i],'/',names(INDEX)[i],".Srvy.FixSt.csv",sep=""),row.names=F)
+  for(i in 1:length(INDEX.absolute)) write.csv(INDEX.absolute[[i]],paste(hnd.indx,names(INDEX)[i],'/',names(INDEX)[i],".Srvy.FixSt.csv",sep=""),row.names=F)
+  for(i in 1:length(INDEX)) write.csv(INDEX[[i]],paste(hnd.indx,names(INDEX)[i],'/',names(INDEX)[i],".Srvy.FixSt_relative.csv",sep=""),row.names=F)
   
   
   #6. create dusky and sandbar figures for RAR
@@ -5316,7 +5473,7 @@ if(Do.abundance=="YES")
   
   #7. Effect of time on size
   #fixed stations 
-  INDEX.size=PRED.size
+  INDEX.size=INDEX.size.absolute=PRED.size
    for(i in 1:N.species.size)
   {
     dummy=PRED.size[[i]]
@@ -5327,7 +5484,9 @@ if(Do.abundance=="YES")
     dummy$LOW=dummy$lower.CL
     dummy$CV=100*dummy$SE/dummy$MEAN
     INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points")
+    INDEX.size.absolute[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="NO",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points",pLOT=FALSE) #ACA
     
+
     #add observed mean size and size at maturity
     par(new = T)
     Nml.size=fn.nmnl.size(dat=Store.size[[i]]$DAT,REL="NO")
@@ -5345,7 +5504,8 @@ if(Do.abundance=="YES")
  
   #8. Export size index   
     #Fixed stations
-  for(i in 1:length(INDEX.size)) write.csv(INDEX.size[[i]],paste(hnd.indx,names(INDEX.size)[i],'/',names(INDEX)[i],".Srvy.FixSt_size.csv",sep=""),row.names=F)
+  for(i in 1:length(INDEX.size)) write.csv(INDEX.size[[i]],paste(hnd.indx,names(INDEX.size)[i],'/',names(INDEX.size)[i],".Srvy.FixSt_size.csv",sep=""),row.names=F)
+  for(i in 1:length(INDEX.size.absolute)) write.csv(INDEX.size.absolute[[i]],paste(hnd.indx,names(INDEX.size)[i],'/',names(INDEX.size)[i],".Srvy.FixSt_size.absolute.csv",sep=""),row.names=F)
   
 
   #9. create dusky and sandbar figures for RAR
@@ -5368,6 +5528,35 @@ if(Do.abundance=="YES")
   mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
   mtext("Year",1,outer=T,line=.25,cex=1.5)
   dev.off()
+  
+  #10. Export size raw data   
+  for(i in 1:length(TARGETS))
+  {
+    dd=DATA%>%
+      filter(BOAT=='NAT' & Method=='LL' & SPECIES==TARGETS[i] & !is.na(FL))%>%
+      mutate(FINYEAR=ifelse(Month>6,paste(year,substr(year+1,3,4),sep='-'),
+                            paste(year-1,substr(year,3,4),sep='-')))
+    #observations
+    N.obs=dd%>%
+      group_by(FINYEAR,SPECIES)%>%
+      tally()%>%
+      rename(N.observations=n)
+    N.shots=dd%>%
+      distinct(SHEET_NO,.keep_all = T)%>%
+      group_by(FINYEAR,SPECIES)%>%
+      tally()%>%
+      rename(N.shots=n)
+    write.csv(full_join(N.shots,N.obs,by=c('FINYEAR','SPECIES')),
+              paste(hnd.indx,names(TARGETS)[i],'/',names(TARGETS)[i],"_Size_composition_Survey_Observations.csv",sep=""),
+              row.names=F)
+    
+    
+    #raw data
+    write.csv(dd%>%
+                dplyr::select(Month,FINYEAR,year,FL,SEX),
+              paste(hnd.indx,names(TARGETS)[i],'/',names(TARGETS)[i],"_Size_composition_Survey.csv",sep=""),row.names=F)
+    
+  }
 }
 
 

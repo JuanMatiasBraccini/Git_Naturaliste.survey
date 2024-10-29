@@ -65,7 +65,7 @@ Do.tiff="NO"
 if(!exists('handl_OneDrive')) source('C:/Users/myb/OneDrive - Department of Primary Industries and Regional Development/Matias/Analyses/SOURCE_SCRIPTS/Git_other/handl_OneDrive.R')
 
 #Source Sharks data base 
-if(User=="Matias") source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Source_Shark_bio.R"))
+if(User=="Matias") source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Source_Shark_bio.R"))
 if(User=="Dani") source("C:/Users/ddw/Documents/Projects/Naturaliste_longline/Source codes/Source_Shark_bio.R")
 rm(DATA)
 
@@ -81,7 +81,9 @@ if(User=="Dani")
   Comnt_Dead=read.csv("C:/Users/ddw/Documents/Projects/Naturaliste_longline/Source codes/Comments_Dead.csv")  
 }
 
-
+Biol.vars=c("UMBIL_SCAR","CLASPLENTH","CLASP_CALC","GON_STAGE","RUN_SPERM","MAXOVRYDIA",
+            "NO_YOLKOVA","UTERINESTG","NO_EMBRYOS","NO_UNDEVELOPED","EMBLEN_1",
+            "STMCH_FULL","STMCH_CONT")
 
 #Diet
 #note: Diet is a csv file that must be manually updated each year. Data is presence/absence
@@ -616,9 +618,9 @@ if(Do.rep=="YES"| Do.diet=="YES")
   Exclude <- c("CD", "BN", "FR", "GB", "GG", "SB","SE", "ST", "WR") #Ostheichthyes 
   
   DATA.rep <-   filter(DATA.bio,year>=1990)%>%
-    dplyr::select(SHEET_NO,date, Day, Month, year, Lat.round, Long.round, SPECIES, SEX,TL, FL, COMMON_NAME, SCIENTIFIC_NAME, UMBIL_SCAR, 
-                  CLASPLENTH, CLASP_CALC, RUN_SPERM,
-                  UTERINESTG, NO_EMBRYOS,EMBLEN_1, NO_UNDEVELOPED,STMCH_FULL,STMCH_CONT, GON_STAGE, NO_YOLKOVA, MAXOVRYDIA,Biol.dat)%>%
+    # dplyr::select(SHEET_NO,date, Day, Month, year, Lat.round, Long.round, SPECIES, SEX,TL, FL, COMMON_NAME, SCIENTIFIC_NAME, UMBIL_SCAR, 
+    #               CLASPLENTH, CLASP_CALC, RUN_SPERM,
+    #               UTERINESTG, NO_EMBRYOS,EMBLEN_1, NO_UNDEVELOPED,STMCH_FULL,STMCH_CONT, GON_STAGE, NO_YOLKOVA, MAXOVRYDIA,Biol.dat)%>%
     filter(!(SPECIES %in% Exclude))%>%
     mutate(SPECIES=factor(SPECIES) ,
            SEX=factor(SEX) , 
@@ -1501,9 +1503,6 @@ if(Do.diet=="YES")
   
   #size distribution of species
   
-  
-  #Multivariate analysis
-  #note: could use FL or TL to see ontogenetic effects (e.g. good size range for duskies, size range other species??)
   
 }
 
