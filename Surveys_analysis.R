@@ -25,7 +25,8 @@
 #         Zero inflated and Hurdle model don't produce SE for predictions,
 #         hence, did Monte Carlo or bootstrapping
 
-#         For each new year, in 'Source_Shark_bio.R' manually subtract lost hooks and add lost fish
+#         For each new year, in 'Source_Shark_bio.R' ('Manually add lost species and subtract lost hooks'), manually subtract 
+#             lost hooks and add lost fish
 
 # DATA SECTION ------------------------------------------------------------
 
@@ -67,7 +68,7 @@ library(gridExtra)
 library(tidyr)
 library(dplyr)
 library(mpath)
-library(glmulti)  #model selection
+#library(glmulti)  #model selection error with library(rJava), need 64 bit Java
 library(emmeans)
 library(foreach)
 library(doParallel)
@@ -85,10 +86,10 @@ source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Plot.Map.R"))
 source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Compare.error.structure.R"))  
 source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_Population.dynamics/fn.fig.R"))
 source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Smart_par.R"))
-
+source(handl_OneDrive('Analyses/SOURCE_SCRIPTS/Git_other/ggplot.themes.R'))  #my themes
 
 #Species names
-SPECIES.names=read.csv(handl_OneDrive("Data/Species.code.csv"))
+SPECIES.names=read.csv(handl_OneDrive("Data/Species.code.csv"),stringsAsFactors=FALSE, fileEncoding="latin1")
 
 #Get info for tiger sharks tissue samples
 Tiger.gen.samples=read.csv(handl_OneDrive("Data/Shark_bio/Tiger.gen.samples.csv"))
@@ -185,7 +186,7 @@ Max.depth=3  #(in metres)
 
 
 
-# Output scalefish size data for Jeff Norris -------------------------------------------------------
+# Output scalefish size data for Jeff Norris & Emily Fisher-------------------------------------------------------
 do.Jeff=FALSE
 if(do.Jeff)
 {
@@ -198,6 +199,22 @@ if(do.Jeff)
   colnames(Jeff)=tolower(colnames(Jeff))
   write.csv(Jeff,handl_OneDrive("Analyses/Catch and effort/Data_Resquests/Jeff N/Scalefish_size.csv"),row.names = F)
   
+}
+do.Emily=FALSE
+if(do.Emily)
+{
+  Emily=DATA%>%filter(!BOAT%in%c("FLIN","HAM","HOU","NAT","RV BREAKSEA","RV Gannet","RV GANNET","RV SNIPE 2") &
+                        Mid.Lat<=(-31) & Mid.Long>115.5 & Method=="GN" & !is.na(TL) & 
+                        SPECIES%in%c("PS.T","JE.T","BA.T"))%>%
+    dplyr::select(c("SPECIES","SCIENTIFIC_NAME","COMMON_NAME","TYPE","SHEET_NO","date","year",
+                    "Month","TL","Method","BOAT","BLOCK","Mid.Lat","Mid.Long","BOTDEPTH",
+                    "MESH_SIZE","MESH_DROP","NET_LENGTH","SOAK.TIME"))
+  colnames(Emily)=tolower(colnames(Emily))
+  write.csv(Emily,handl_OneDrive("Analyses/Catch and effort/Data_Resquests/Emily/Scalefish_size.csv"),row.names = F)
+  Emily%>%
+    ggplot(aes(tl))+
+    geom_histogram()+
+    facet_wrap(~common_name)
 }
 
 # Depth distribution of sandbar off Perth -------------------------------------------------------
@@ -438,6 +455,70 @@ if(check.new.years.Nat.survey)
     xlim(2000,2023)
   
 }
+# Plot sex spatial distribution for SS3 modelling -------------------------------------------------------
+DO.DIS=FALSE
+if(DO.DIS)
+{
+  Check.this.sp=with(DATA%>%
+                       filter(Mid.Lat>(-26) & TYPE=='Elasmo'),table(SPECIES))
+  Check.this.sp=Check.this.sp[Check.this.sp>40]
+  colfunc <- colorRampPalette(c("pink",'grey', "blue"))
+  fn.spatio.temp_sex.for.SS=function(SPe)
+  {
+    d=DATA%>%
+      filter(Mid.Lat>(-26) & SPECIES==SPe)%>%
+      mutate(LAT=Mid.Lat,
+             LONG=Mid.Long)%>%
+      filter(!is.na(LONG))%>%
+      # filter(!is.na(BOAT))%>%
+      # filter(Method=='GN')%>%        #select gillnet only
+      #  filter(MESH_SIZE%in%c(6.5,7))%>%  #select only 6.5 and 7 inch mesh data (same as fleet)
+      filter(!is.na(SEX))
+    
+    NM=unique(d$COMMON_NAME)
+    d1=d%>%
+      mutate(SEX=ifelse(SEX=='F','Female','Male'),
+             LAT=round(LAT),
+             LONG=round(LONG))%>%
+      group_by(LAT,LONG,SEX)%>%
+      tally()%>%
+      ungroup()%>%
+      spread(SEX,n,fill=0)%>%
+      mutate(N=Female+Male,
+             Prop.male=Male/N)%>%
+      filter(N>=5)%>%
+      mutate(Prop.male1=as.character(round(Prop.male,1)),
+             Prop.male1=ifelse(Prop.male1==0,0.01,Prop.male1))
+    
+    Limx=range(d1$LONG,na.rm=T)
+    Limy= range(d1$LAT,na.rm=T) 
+    Kl.rnge=sort(unique(d1$Prop.male1))
+    Kls=colfunc(length(Kl.rnge))
+    names(Kls)=Kl.rnge
+    p=d1%>%
+      mutate(Prop.male1=factor(Prop.male1,levels=Kl.rnge))%>%
+      ggplot(aes(LONG,LAT,color=Prop.male1))+
+      xlim(Limx)+ylim(Limy)+
+      ggtitle('Proportion males')+
+      theme_PA()+theme(legend.position = 'none')+
+      geom_contour(data = Bathymetry%>%filter(V1>=Limx[1] & V1<=Limx[2] & V2>=Limy[1] & V2<=Limy[2])%>%
+                     rename(LONG=V1,LAT=V2)%>%mutate(N=0.01,Prop.male=0.001),
+                   aes(LONG, LAT, z=V3),breaks=c(-50,-100,-200,-500),linetype="solid",colour="grey70",alpha=0.6)+
+      geom_point(size=5)+
+      scale_color_manual(values = Kls)+
+      geom_text_repel(aes(label = Prop.male1),box.padding = 0.5)
+    print(p)
+    ggsave(handl_OneDrive(paste0("Analyses/Surveys/Naturaliste_longline/outputs/Sex distribution/",
+                                 NM,".tiff")),
+           width = 8,height = 8,compression = "lzw")
+    
+    
+  }
+  for(s in 1:length(Check.this.sp)) fn.spatio.temp_sex.for.SS(SPe=names(Check.this.sp)[s])
+  
+}
+
+
 # PROCEDURE SECTION -------------------------------------------------------
 
 #Check size distribution by gear
@@ -470,7 +551,7 @@ if(do.this)
     filter(Taxa=='Elasmobranch')%>%
     filter(!SPECIES=='XX')%>%
     mutate(Mid.Lat=-abs(Mid.Lat))%>%
-    group_by(CAAB_code,COMMON_NAME,SCIENTIFIC_NAME,year,Month,Method,Mid.Lat,Mid.Long,BOTDEPTH,TL,SEX)%>%
+    group_by(SHEET_NO,BOAT,CAAB_code,COMMON_NAME,SCIENTIFIC_NAME,year,Month,Method,Mid.Lat,Mid.Long,BOTDEPTH,TL,SEX)%>%
     summarise(Numbers=sum(Numbers))%>%
     ungroup()%>%
     rename(Latitude=Mid.Lat,

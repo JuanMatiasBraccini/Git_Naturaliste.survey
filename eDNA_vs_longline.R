@@ -12,22 +12,34 @@ library(readxl)
 #Sharks data base 
 source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Source_Shark_bio.R"))
 
-#eDNA samples collected
+#eDNA samples collected (metadata)
 eDNA.samples=read.csv(handl_OneDrive('eDNA/eDNA_Samples.csv'))
-
-#eDNA results
-eDNA.results_taxonomic_matrix <- read_excel(handl_OneDrive('eDNA/Matias_shark_eDNA_taxonomic_matrix.xlsx'), sheet = 'unsubsampled_matrix',skip = 0)
 eDNA.results_Common.name=read.csv(handl_OneDrive('eDNA/Common.name_eDNA results.csv'))
+
+#eDNA results for 2022 sampling year
+#Kat's google drive https://drive.google.com/drive/folders/1Mz9mpOY2ByqWpA1NHb_7MuNqG_XxbcPB?usp=sharing 
+eDNA.results_taxonomic_matrix <- read_excel(handl_OneDrive('eDNA/Matias_shark_eDNA_taxonomic_matrix.xlsx'), sheet = 'unsubsampled_matrix',skip = 0)
+eDNA.results_taxonomic_matrix_2023 <- read_excel(handl_OneDrive('eDNA/dpird2023_uncurated_taxa.xlsx'), sheet = 'Sheet 1 - dpird2023_uncurated_t',skip = 0)
+
 
 # Manipulate data ------------------------------------------------------------
 eDNA.samples=eDNA.samples%>%
               mutate(Date=as.Date(Date,"%d/%m/%Y"))
 
 eDNA.dat_longline=DATA%>%
-          filter(BOAT=='NAT' & Lat.round>(-27) & SHEET_NO%in%unique(eDNA.samples$Sheet.Number))%>%
-          mutate(SPECIES=ifelse(SPECIES=='GH' & SHEET_NO=='I00842','HG',SPECIES))%>%
-          dplyr::select(SHEET_NO,date,Mid.Lat,Mid.Long,SOAK.TIME,BOTDEPTH,SPECIES,CAAB_code,
-                        CAES_Code,COMMON_NAME,SCIENTIFIC_NAME,SEX,FL,TL,BAG_NO,Number,RECORDER)
+                  filter(BOAT=='NAT' & Lat.round>(-27) & SHEET_NO%in%unique(eDNA.samples$Sheet.Number))%>%
+                  mutate(SPECIES=ifelse(SPECIES=='GH' & SHEET_NO=='I00842','HG',SPECIES))%>%
+                  dplyr::select(SHEET_NO,date,Mid.Lat,Mid.Long,SOAK.TIME,BOTDEPTH,SPECIES,CAAB_code,
+                                CAES_Code,COMMON_NAME,SCIENTIFIC_NAME,SEX,FL,TL,BAG_NO,Number,RECORDER)
+
+eDNA.results_taxonomic_matrix_2023=eDNA.results_taxonomic_matrix_2023%>%
+                        dplyr::select(-c(OTU,numberOfUnq_BlastHits,NTC,Positive,contam,LCA))%>%
+                        group_by(domain,phylum,class,order,family,genus,species,taxa)%>%
+                        summarise_at(vars(E_312_01:E_312_22), sum, na.rm = TRUE)
+
+eDNA.results_taxonomic_matrix=full_join(eDNA.results_taxonomic_matrix,eDNA.results_taxonomic_matrix_2023,
+                                        by=c("domain","phylum","class","order","family","genus","species","taxa"))%>% 
+                                        mutate(across(where(is.numeric), ~ replace_na(.x, 0)))
 
 working='online'  #remove all this when back in Oz
 if(working=='offline')
@@ -43,33 +55,42 @@ if(working=='offline')
   eDNA.results_Common.name=read.csv('C:/Users/myb/OneDrive - Department of Primary Industries and Regional Development/Desktop/eDNA data/eDNA.results_Common.name.csv')
 }
 
-Meta.data=eDNA.samples%>%left_join(eDNA.dat_longline%>%
-                                     distinct(SHEET_NO,Mid.Lat,Mid.Long),
-                                   by=c('Sheet.Number'='SHEET_NO'))
+Meta.data=eDNA.samples%>%
+              left_join(eDNA.dat_longline%>%
+                          distinct(SHEET_NO,Mid.Lat,Mid.Long),
+                        by=c('Sheet.Number'='SHEET_NO'))
+
+# Export stuff for Jess ------------------------------------------------------------
 setwd(handl_OneDrive('Analyses/Surveys/Naturaliste_longline/outputs/eDNA_vs_longline'))
-write.csv(Meta.data,"Meta.data_eDNA_samples.csv",row.names = F)
-write.csv(eDNA.dat_longline,"Longline_samples.csv",row.names = F)
+
+write.csv(eDNA.results_taxonomic_matrix,"For Jessica Pearce/eDNA.results_taxonomic_matrix.csv",row.names = F)
+write.csv(eDNA.results_Common.name,"For Jessica Pearce/eDNA.results_Common.name.csv",row.names = F)
+write.csv(Meta.data,"For Jessica Pearce/Meta.data_eDNA_samples.csv",row.names = F)
+write.csv(eDNA.dat_longline,"For Jessica Pearce/Longline_samples.csv",row.names = F)
 
 
 eDNA.dat_longline=eDNA.dat_longline%>%
-          left_join(eDNA.samples%>%
-                      dplyr::select(Sample.Time,Filter.Time,Water.Depth,Sample.Depth,
-                                                 Sample.ID,Comments,Sheet.Number)%>%
-                      filter(Sheet.Number%in%unique(eDNA.dat_longline$SHEET_NO))%>%
-                      filter(grepl("B",Sample.ID)),  #ACA: why selection "B" only??? loosing Top and 2023 altogether
-                    by=c('SHEET_NO'='Sheet.Number'))
+                    left_join(eDNA.samples%>%
+                                dplyr::select(Sample.Time,Filter.Time,Water.Depth,Sample.Depth,
+                                              Sample.ID,Comments,Sheet.Number)%>%
+                                filter(Sheet.Number%in%unique(eDNA.dat_longline$SHEET_NO))%>%
+                                filter(!grepl("T",Sample.ID))%>%
+                                distinct(Sheet.Number, .keep_all=T),  #this selects Bottom samples from 2022 and 1 replicated for 2023 sampling.
+                              by=c('SHEET_NO'='Sheet.Number'))
 
 Matrix=eDNA.dat_longline%>%
   group_by(Sample.ID,COMMON_NAME)%>%
   tally()%>%
   spread(COMMON_NAME,n,fill=0)%>%
   data.frame
-write.csv(Matrix,"Longline_matrix.csv",row.names = F)
 
+write.csv(Matrix, "For Jessica Pearce/Longline_matrix.csv",row.names = F)
+
+
+# Output basic stuff ------------------------------------------------------------
 eDNA.results_taxonomic_matrix=eDNA.results_taxonomic_matrix%>%
-                                gather(Sample.ID,n,-c(domain, phylum, class, order, family, genus, species, taxa))%>%
+  gather(Sample.ID,n,-c(domain, phylum, class, order, family, genus, species, taxa))%>%
   left_join(eDNA.results_Common.name,by=c('taxa'))
-
 
 #combine eDNA results with longline
 #note: combine replicates (_A & _B)

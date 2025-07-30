@@ -28,7 +28,7 @@ library(geosphere)
 library(ggplot2)
 library(pscl)  #zero-inflated models
 library(MCMCglmm) #zero-inflated models
-library(glmmADMB) #zero-inflated models
+#library(glmmADMB) #zero-inflated models
 library(tweedie)
 require(statmod) # Provides  tweedie  family functions
 library(bbmle)  #AIC table
@@ -60,7 +60,7 @@ Do.jpeg="YES"
 Do.tiff="NO"
 
 
-# -- DATA SECTION --
+# DATA SECTION -------------------------------------------
 
 if(!exists('handl_OneDrive')) source('C:/Users/myb/OneDrive - Department of Primary Industries and Regional Development/Matias/Analyses/SOURCE_SCRIPTS/Git_other/handl_OneDrive.R')
 
@@ -68,6 +68,9 @@ if(!exists('handl_OneDrive')) source('C:/Users/myb/OneDrive - Department of Prim
 if(User=="Matias") source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Source_Shark_bio.R"))
 if(User=="Dani") source("C:/Users/ddw/Documents/Projects/Naturaliste_longline/Source codes/Source_Shark_bio.R")
 rm(DATA)
+source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_Population.dynamics/fn.fig.R"))
+Do.tiff="NO"    #select figure extension
+Do.jpeg="YES"
 
 #Comments data  
 if(User=="Matias") 
@@ -86,7 +89,7 @@ Biol.vars=c("UMBIL_SCAR","CLASPLENTH","CLASP_CALC","GON_STAGE","RUN_SPERM","MAXO
             "STMCH_FULL","STMCH_CONT")
 
 #Diet
-#note: Diet is a csv file that must be manually updated each year. Data is presence/absence
+#note: Diet is a csv file that must be manually updated (see '#manually add new years data' below). Data is presence/absence
 if(User=="Matias")
 {
   Diet=read.csv(handl_OneDrive("Data/Naturaliste/Look.at.diet_1.csv"))
@@ -99,9 +102,7 @@ if(User=="Dani")   Diet=read.csv("C:/Users/ddw/Documents/Projects/Naturaliste_lo
 
 
 
-# -- CONTROL SECTION --
-Current.Yr=2017
-
+# CONTROL SECTION -------------------------------------------------------------------------
 
 #control if doing survival analysis
 #Do.survival="YES"
@@ -116,10 +117,10 @@ Do.ecosystem="NO"
 
 
 
-# -- PROCEDURE SECTION --
+# DATA MANIPULATION -------------------------------------------------------------------------
 
 #Create data sets for PCS and biological analysis 
-#note: we assume that any shark that was dissected was not sacrified so it was dissected 
+#note: we assume that any shark that was dissected was not sacrificed so it was dissected 
 #       because it arrived dead on deck
 
   #is there biological data of any sort?
@@ -180,8 +181,114 @@ DATA.bio=subset(DATA.bio,Biol.dat=="YES")
 Tab.sp=sort(table(as.character(DATA.bio$COMMON_NAME)))
 
 
+if(Do.rep=="YES"| Do.diet=="YES")
+{
+  #Exclude all bony fish from data
+  n.min=5
+  Exclude <- c("CD", "BN", "FR", "GB", "GG", "SB","SE", "ST", "WR") #Ostheichthyes 
+  
+  DATA.rep <-   filter(DATA.bio,year>=1990)%>%
+    # dplyr::select(SHEET_NO,date, Day, Month, year, Lat.round, Long.round, SPECIES, SEX,TL, FL, COMMON_NAME, SCIENTIFIC_NAME, UMBIL_SCAR, 
+    #               CLASPLENTH, CLASP_CALC, RUN_SPERM,
+    #               UTERINESTG, NO_EMBRYOS,EMBLEN_1, NO_UNDEVELOPED,STMCH_FULL,STMCH_CONT, GON_STAGE, NO_YOLKOVA, MAXOVRYDIA,Biol.dat)%>%
+    filter(!(SPECIES %in% Exclude))%>%
+    mutate(SPECIES=factor(SPECIES) ,
+           SEX=factor(SEX) , 
+           Month=factor(Month))
+  
+  STORE.l=vector('list',length(Biol.vars))
+  names(STORE.l)=Biol.vars
+  for(q in 1:length(Biol.vars))
+  {
+    d=DATA.rep[,match(c("SPECIES",Biol.vars[q]),names(DATA.rep))]  
+    id=match(Biol.vars[q],names(d))
+    d=d[!is.na(d[,id]),]
+    TABLA=table(d$SPECIES)
+    STORE.l[[q]]=TABLA
+  }
+  
+  STORE.l=do.call(rbind,STORE.l)
+  
+  Dummy=STORE.l
+  Dummy[Dummy<n.min]=0
+  Drop=colSums(Dummy)
+  Drop=subset(Drop,Drop==0)
+  ID=match(names(Drop),colnames(Dummy))
+  Dummy=Dummy[,-ID]
+  Tabl.rep.info.sp=t(Dummy)
+  
+  #Select species for analysis
+  
+  Dummy.1=Dummy[-match(c("STMCH_FULL","STMCH_CONT"),rownames(Dummy)),]  
+  Reprod.vars=rownames(Dummy.1)
+  Reprod.vars=Reprod.vars[-match("NO_UNDEVELOPED",Reprod.vars)]  #remove NO_UNDEVELOPED because no obs for these species
+  RnK.sp=sort(colSums(Dummy.1))
+  RnK.sp=RnK.sp[-match(c("GM","TK","BW","WH","ES","SC"),names(RnK.sp))]    #remove commercial species (already done)
+  Reprod.sp=names(RnK.sp)
+  Look.at.repro=subset(DATA.bio,SPECIES%in%Reprod.sp & (!is.na(UMBIL_SCAR) | !is.na(CLASPLENTH)
+                                                        | !is.na(CLASP_CALC) | !is.na(GON_STAGE) | !is.na(RUN_SPERM) | !is.na(MAXOVRYDIA) 
+                                                        | !is.na(NO_YOLKOVA) | !is.na(UTERINESTG) | !is.na(NO_EMBRYOS)
+                                                        | !is.na(NO_UNDEVELOPED) | !is.na(EMBLEN_1) ))
+  Look.at.repro=Look.at.repro[,match(c("SHEET_NO","Month","year","SPECIES","COMMON_NAME","SCIENTIFIC_NAME",
+                                       "TL","FL","Disc.width","SEX",Reprod.vars),names(Look.at.repro))]
+  
+  Fem.dat=subset(DATA.bio,!SPECIES%in%c("GM","TK","BW","WH") & SEX=="F")
+  
+  #Look.at.repro[Look.at.repro=="NA"]<-NA
+  these.sp.rep=unique(Look.at.repro$SPECIES)
+  n.sp=length(these.sp.rep)
+  n.vars=length(Reprod.vars)
+  
+  if(User=="Matias") setwd(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Reproduction"))
+  if(User=="Dani") setwd("whatever")
+  
+  #see available data by species
+  for(s in 1:n.sp)
+  {
+    d=subset(Look.at.repro,SPECIES==these.sp.rep[s])
+    SPnme=unique(d$COMMON_NAME)
+    fn.fig(paste("Prelim/Rep.data_",SPnme,sep=""),2400, 2400)    
+    par(mfcol=c(4,3),mar=c(1,1,1,1),oma=c(.75,.75,1,.1),las=1,mgp=c(1,.6,0))
+    for(v in 1:n.vars)
+    {
+      ID.v=match(Reprod.vars[v],names(d))
+      if(is.numeric(d[,ID.v]))
+      {
+        if(sum(d[,ID.v],na.rm=T)>0)hist(d[,ID.v],ylab="",xlab="FL",main=Reprod.vars[v])else
+        {
+          plot(0,ann=F,col='transparent',axes=F)  
+          legend("center","No data",bty='n',cex=1.5)
+          legend("top",Reprod.vars[v],cex=1.25)
+        }
+      }else
+      {
+        if(Reprod.vars[v]=="GON_STAGE")
+        {
+          TAB=as.matrix(table(d[,ID.v],d$SEX))
+          if(nrow(TAB)>0)barplot((TAB),beside=F,legend = rownames(TAB),main="") else
+          {
+            plot(0,ann=F,col='transparent',axes=F)
+            legend("center","No data",bty='n',cex=1.5)
+          }
+        }else
+        {
+          TAB=as.matrix(table(d[,ID.v]))
+          if(nrow(TAB)>0)barplot((TAB),beside=F,legend = rownames(TAB),main="") else
+          {
+            plot(0,ann=F,col='transparent',axes=F)
+            legend("center","No data",bty='n',cex=1.5)
+          }
+        }
+        legend("top",Reprod.vars[v],cex=1.25)
+      }
+      
+    }
+    mtext(SPnme,3,-.45,outer=T,cex=1.25)
+    dev.off()
+  }
+}
 
-#1. IMMEDIATE POST CAPTURE MORTALITY
+#1. IMMEDIATE POST CAPTURE MORTALITY -------------------------------------------------------------------------
 if(Do.survival=="YES")  
 {
   #Combine blacktips
@@ -610,906 +717,45 @@ if(Do.survival=="YES")
   
 }
 
+#2. Export latest diet to add to  -------------------------------------------------------------------------
+THESE.YEARS=2018:2024  #years for manual diet update (add to 'Look.at.diet_1.csv')
+Dummy.2=Dummy
+Dummy.2[Dummy.2>0]=1
+Look=sort(colSums(Dummy.2))
+DieT=Dummy.2[match("STMCH_CONT",row.names(Dummy.2)),]
+DieT=sort(DieT)
+DieT=subset(DieT,DieT>0)
+DieT=names(DieT)
 
-if(Do.rep=="YES"| Do.diet=="YES")
-{
-  #Exclude all bony fish from data
-  n.min=5
-  Exclude <- c("CD", "BN", "FR", "GB", "GG", "SB","SE", "ST", "WR") #Ostheichthyes 
-  
-  DATA.rep <-   filter(DATA.bio,year>=1990)%>%
-    # dplyr::select(SHEET_NO,date, Day, Month, year, Lat.round, Long.round, SPECIES, SEX,TL, FL, COMMON_NAME, SCIENTIFIC_NAME, UMBIL_SCAR, 
-    #               CLASPLENTH, CLASP_CALC, RUN_SPERM,
-    #               UTERINESTG, NO_EMBRYOS,EMBLEN_1, NO_UNDEVELOPED,STMCH_FULL,STMCH_CONT, GON_STAGE, NO_YOLKOVA, MAXOVRYDIA,Biol.dat)%>%
-    filter(!(SPECIES %in% Exclude))%>%
-    mutate(SPECIES=factor(SPECIES) ,
-           SEX=factor(SEX) , 
-           Month=factor(Month))
-  
-  STORE.l=vector('list',length(Biol.vars))
-  names(STORE.l)=Biol.vars
-  for(q in 1:length(Biol.vars))
-  {
-    d=DATA.rep[,match(c("SPECIES",Biol.vars[q]),names(DATA.rep))]  
-    id=match(Biol.vars[q],names(d))
-    d=d[!is.na(d[,id]),]
-    TABLA=table(d$SPECIES)
-    STORE.l[[q]]=TABLA
-  }
-  
-  STORE.l=do.call(rbind,STORE.l)
-  
-  Dummy=STORE.l
-  Dummy[Dummy<n.min]=0
-  Drop=colSums(Dummy)
-  Drop=subset(Drop,Drop==0)
-  ID=match(names(Drop),colnames(Dummy))
-  Dummy=Dummy[,-ID]
-  Tabl.rep.info.sp=t(Dummy)
-  
-  #Select species for analysis
+Look.at.diet=subset(DATA.bio,SPECIES%in%DieT & !is.na(STMCH_CONT),select=c(SPECIES,SHEET_NO,TL,FL,SEX,STMCH_CONT,
+                                                                           STMCH_FULL,COMMON_NAME,SCIENTIFIC_NAME,year))
+#manually add new years data
+Look.at.diet=subset(Look.at.diet,year%in%THESE.YEARS)
+Look.at.diet=Look.at.diet[,-match("year",names(Look.at.diet))]
+if(User=="Matias") setwd(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Diet"))
+if(User=="Georgina") setwd("whatever")
+Look.at.diet=Look.at.diet%>%
+  relocate(SHEET_NO,COMMON_NAME,SCIENTIFIC_NAME,SPECIES,SEX,TL,FL,STMCH_FULL,STMCH_CONT)
+dumi=Diet%>%
+  dplyr::select(-names(Look.at.diet))
+dumi=dumi[1:nrow(Look.at.diet),]
+dumi[]=''
+write.csv(cbind(Look.at.diet,dumi),"Look.at.diet_all_sp.csv",row.names=F)
 
-  Dummy.1=Dummy[-match(c("STMCH_FULL","STMCH_CONT"),rownames(Dummy)),]  
-  Reprod.vars=rownames(Dummy.1)
-  Reprod.vars=Reprod.vars[-match("NO_UNDEVELOPED",Reprod.vars)]  #remove NO_UNDEVELOPED because no obs for these species
-  RnK.sp=sort(colSums(Dummy.1))
-  RnK.sp=RnK.sp[-match(c("GM","TK","BW","WH","ES","SC"),names(RnK.sp))]    #remove commercial species (already done)
-  Reprod.sp=names(RnK.sp)
-  Look.at.repro=subset(DATA.bio,SPECIES%in%Reprod.sp & (!is.na(UMBIL_SCAR) | !is.na(CLASPLENTH)
-                  | !is.na(CLASP_CALC) | !is.na(GON_STAGE) | !is.na(RUN_SPERM) | !is.na(MAXOVRYDIA) 
-                  | !is.na(NO_YOLKOVA) | !is.na(UTERINESTG) | !is.na(NO_EMBRYOS)
-                  | !is.na(NO_UNDEVELOPED) | !is.na(EMBLEN_1) ))
-  Look.at.repro=Look.at.repro[,match(c("SHEET_NO","Month","year","SPECIES","COMMON_NAME","SCIENTIFIC_NAME",
-                            "TL","FL","SEX",Reprod.vars),names(Look.at.repro)),]
-  
-  #remove species with ID issues
-  sp.ID.issues=c("Guitarfish & shovelnose ray","Wobbegong (general)","Western Wobbegong","Spotted wobbegong",
-                 "Angel Shark (general)","Banded wobbegong","Blacktip sharks","Sawsharks","Cobbler Wobbegong")
-  Look.at.repro=subset(Look.at.repro,!COMMON_NAME%in%sp.ID.issues)
-  #Look.at.repro[Look.at.repro=="NA"]<-NA
-  these.sp.rep=unique(Look.at.repro$SPECIES)
-  n.sp=length(these.sp.rep)
-  n.vars=length(Reprod.vars)
-  
-  if(User=="Matias") setwd(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Reproduction"))
-  if(User=="Dani") setwd("whatever")
-  
-  #see available data by species
-  for(s in 1:n.sp)
-  {
-    d=subset(Look.at.repro,SPECIES==these.sp.rep[s])
-    SPnme=unique(d$COMMON_NAME)
-    fn.fig(paste("Prelim/Rep.data_",SPnme,sep=""),2400, 2400)    
-    par(mfcol=c(4,3),mar=c(1,1,1,1),oma=c(.75,.75,1,.1),las=1,mgp=c(1,.6,0))
-    for(v in 1:n.vars)
-    {
-      ID.v=match(Reprod.vars[v],names(d))
-      if(is.numeric(d[,ID.v]))
-      {
-        if(sum(d[,ID.v],na.rm=T)>0)hist(d[,ID.v],ylab="",xlab="FL",main=Reprod.vars[v])else
-          {
-            plot(0,ann=F,col='transparent',axes=F)  
-            legend("center","No data",bty='n',cex=1.5)
-            legend("top",Reprod.vars[v],cex=1.25)
-          }
-      }else
-      {
-        if(Reprod.vars[v]=="GON_STAGE")
-        {
-          TAB=as.matrix(table(d[,ID.v],d$SEX))
-          if(nrow(TAB)>0)barplot((TAB),beside=F,legend = rownames(TAB),main="") else
-          {
-            plot(0,ann=F,col='transparent',axes=F)
-            legend("center","No data",bty='n',cex=1.5)
-          }
-        }else
-        {
-          TAB=as.matrix(table(d[,ID.v]))
-          if(nrow(TAB)>0)barplot((TAB),beside=F,legend = rownames(TAB),main="") else
-          {
-            plot(0,ann=F,col='transparent',axes=F)
-            legend("center","No data",bty='n',cex=1.5)
-          }
-        }
-        legend("top",Reprod.vars[v],cex=1.25)
-      }
-      
-    }
-    mtext(SPnme,3,-.45,outer=T,cex=1.25)
-    dev.off()
-  }
-}
+Rel.dat=subset(DATA.bio,SHEET_NO%in%unique(Diet$SHEET_NO),select=c(SHEET_NO,date.x,Mid.Lat, Mid.Long, Lat.round, Long.round))
 
 
-#2. REPRODUCTION     
-#MISSING: EMBLEN_ there's several so look at variability and report! (use mean..?)
-#         TL-FL conversion, review outputs
-#note: in MS say that 4 main commercial and species with ID issues were not included
-if(Do.rep=="YES")
-{
-    #Analyses
-    #1. Umbilical scars    #data only reliable for a few species
-    bin=10  #size bins
-    ID.v=match("UMBIL_SCAR",names(Look.at.repro))
-    Select.sp=with(subset(Look.at.repro,!UMBIL_SCAR=="N"),as.matrix(table(SPECIES,UMBIL_SCAR)))
-    Select.sp=Select.sp[rowSums(Select.sp)>1,]
-    UMB_sca_sp=rownames(Select.sp)
-    UMB_sca_sp=UMB_sca_sp[-match(c("HZ"),UMB_sca_sp)]
-    fn.fig('Fig_Umb_scar',1200, 2400)
-    par(mfcol=c(3,1),mar=c(1,4,3,1.5),oma=c(3,.1,.1,.1),las=1,mgp=c(.9,.6,0))
-    for(s in 1:length(UMB_sca_sp))
-    {
-      d=subset(Look.at.repro,SPECIES==UMB_sca_sp[s]&!UMBIL_SCAR=="N")
-      SPnme=unique(d$COMMON_NAME)
-      d$FL=floor(d$FL/bin)*bin
-      TAB=as.matrix(table(d[,ID.v],d$FL))
-      if(ncol(TAB)==1)
-      {
-        TAB1=matrix(nrow=nrow(TAB),ncol=1)
-        colnames(TAB1)=as.numeric(colnames(TAB))+bin
-        TAB=cbind(TAB,TAB1)
-      }
-      
-      MAX=as.numeric(colnames(TAB)[ncol(TAB)])
-      MIN=as.numeric(colnames(TAB)[1])
-      SEQ=seq(MIN,MAX,bin)
-      Add1=SEQ[which(!SEQ%in%as.numeric(colnames(TAB)))]
-      Add=matrix(ncol=length(Add1),nrow=nrow(TAB))
-      colnames(Add)=Add1
-      TAB=cbind(TAB,Add)
-      TAB=TAB[,match(SEQ,colnames(TAB))]
-      barplot(TAB,legend = rownames(TAB),cex.axis=1.25,cex.names=1.25,args.legend=list(bty='n',cex=1.25))
-      mtext(paste(SPnme," (n=",nrow(d),")",sep=""),3,.5,cex=1.25)
-      box()
-    }
-    mtext("Fork length (cm)",1,1.5,outer=T,cex=1.5)
-    mtext("Frequency",2,-1.8,outer=T,las=3,cex=1.5)
-    dev.off()
-    
-    
-    #MALE ANALYSES
-    
-    #1. Clasper length, calcification and maturity
-    #note: logistic ogive of the form Prop Mature=pmax/(1+exp((dat-a)/b)); a=inflex; b=slope
-    
-    Look.at.repro$CLASP_CALC=with(Look.at.repro,ifelse(SPECIES=="GN"&FL<140,"N",CLASP_CALC))
-    Select.sp=with(subset(Look.at.repro,!is.na(CLASPLENTH) & SEX=="M"),table(SPECIES))
-    Select.sp=Select.sp[Select.sp>=n.min]
-    CLas_cal_sp=rownames(Select.sp)
-    #remove some species for which there's not enough data
-    CLas_cal_sp=CLas_cal_sp[-match(c("PJ","TN","ZE","HZ","PA","NS","TS"),CLas_cal_sp)]
-    
-    fn.fig('Fig_male_clas_length',1400, 2400)    
-    par(mfcol=c(6,3),mar=c(1,1,2,.9),oma=c(3,3,.1,.1),las=1,mgp=c(.9,.6,0))
-    for(s in 1:length(CLas_cal_sp))
-    {
-      d=subset(Look.at.repro,SPECIES==CLas_cal_sp[s] & CLASPLENTH>0)
-      SPnme=unique(d$COMMON_NAME)
-      d$CLASP_CALC=with(d,ifelse(is.na(CLASP_CALC),"NA",CLASP_CALC))
-      d$CLASP_CALC_col=with(d,
-                            ifelse(CLASP_CALC=="N","white",
-                                   ifelse(CLASP_CALC=="P","grey60",
-                                          ifelse(CLASP_CALC=="Y","black",
-                                                 "grey90"))))
-      d$CLASP_CALC_pt=with(d,ifelse(CLASP_CALC%in%c("N","P","Y"),21,3))
-      
-      
-      plot(d$FL,d$CLASPLENTH,pch=d$CLASP_CALC_pt,bg=d$CLASP_CALC_col,cex=1.25,
-           ylab="",xlab="")
-      mtext(paste(SPnme," (n=",nrow(d),")",sep=""),3,0,cex=.72)
-    }
-    plot(1,ann=F,xaxt='n',yaxt='n',col="transparent")
-    box(col="white")
-    legend('top',c("Y","P","N","Unknown"),pch=c(21,21,21,3),pt.bg=c("black","grey60","white","black"),
-           bty='n',cex=1.25,title="Calcification")
-    mtext("Fork length (cm)",1,1.5,outer=T,cex=1.5)
-    mtext("Clasper length (cm)",2,1.2,outer=T,las=3,cex=1.5)
-    dev.off()
-    
-    
-    #2. get L50
-    dat.size.brth=data.frame(SPECIES=CLas_cal_sp,Birth=c(60,50,100,50,65,45,50,
-                                                         60,35,60,60,35,52,50,50,130))
-    
-    fn.logis=function(dat,pmax,inflx,slop) pmax/(1+exp((dat-inflx)/slop))
-    fn.logis_L50=function(dat,pmax,L50,L95) pmax/(1+exp(-log(19)*((dat-L50)/(L95-L50))))
-    objfun=function(theta)
-    {
-      #d$Prob.n = fn.logis(d$FL,1,theta[1],theta[2])
-      d$Prob.n = fn.logis_L50(d$FL,1,theta[1],theta[2])
-      d$Like.n <-  with(d,ifelse(N==1,Prob.n,(1-Prob.n)))
-      d$log.like=log(d$Like.n+1e-100)
-      ll=sum(-d$log.like)
-      return(ll)
-    }
-    show.classification="NO"
-    #Fitting.approach="optim"
-    Fitting.approach="nls"
-    
-    Store=vector('list',length(CLas_cal_sp))  
-    names(Store)=CLas_cal_sp
-    fn.fig('Fig_male_maturity_fit',1800, 2400)    
-    par(mfcol=c(6,3),mar=c(1,1,2,.9),oma=c(3,3,.1,.1),las=1,mgp=c(.9,.6,0))
-    for(s in 1:length(CLas_cal_sp))
-    {
-      d=subset(Look.at.repro,SPECIES==CLas_cal_sp[s] & CLASPLENTH>0)
-      d$FL=with(d,ifelse(is.na(FL),.85*TL,FL))
-      d=subset(d,!is.na(FL))
-      d$N=d$CLASPLENTH/max(d$CLASPLENTH)
-      
-      #consider calcification
-      d$N=with(d,ifelse(CLASP_CALC=="N",0,N))
-      
-      #add dummies to anchor model
-      BirtH=dat.size.brth[s,]$Birth
-      Extra.n=5
-      d.optim=d[1:Extra.n,]
-      d.optim[,]=NA
-      d.optim$FL=seq(BirtH,BirtH*1.1,length.out=Extra.n)
-      d.optim$N=rep(0,Extra.n)
-      
-      d=rbind(d,d.optim)
-      d=subset(d,!is.na(N))
-      
-      #fit model
-      #nls approach
-      if(Fitting.approach=='nls')
-      {
-        mod <- nls(N~1/(1+exp((FL-inflex)/slope)), data=d,
-                   start=list(inflex=quantile(d$FL,probs=.6), slope=-2),
-                   nls.control(maxiter = 100, tol = 1e-06, minFactor = 1/1024,
-                               printEval = FALSE, warnOnly = T))
-        #L50 and L95 approach
-        #note: L50 == inflex point
-        # mod1 <- nls(N~1/(1+exp(-log(19)*((FL-L50)/(L95-L50)))), data=d, 
-        #                 start=list(L50=quantile(d$FL,probs=.6), L95=quantile(d$FL,probs=.8)),
-        #                 nls.control(maxiter = 100, tol = 1e-06, minFactor = 1/1024,
-        #                             printEval = FALSE, warnOnly = T))
-        
-        NM=unique(d$COMMON_NAME)[1]
-        newD=data.frame(FL=seq(min(d$FL),max(d$FL)))
-        PRED=predict(mod,newdata=newD)
-        plot(d$FL,d$N,pch=19,ylab="",xlab="",main="")
-        mtext(paste(NM," (n=",nrow(d),")",sep=""),3,0,cex=.85)
-        lines(newD$FL,PRED,lwd=2,col="grey50")
-        
-        TABL=as.data.frame(summary(mod)$coefficients[,c(1:2,4)])
-        TABL$SPECIES=NM
-        TABL=cbind(TABL[1,c(4,1:3)],TABL[2,1:3])
-        names(TABL)[2:7]=c("inflex","inflex.SE","P","slope","slope.SE","P")
-        TABL$"a (SE)"=paste(round(TABL$inflex,2)," (",round(TABL$inflex.SE,2),")",sep="")
-        TABL$"b (SE)"=paste(round(TABL$slope,2)," (",round(TABL$slope.SE,2),")",sep="")
-        Store[[s]]=TABL[,c(1,8,4,9,7)]
-        
-      }
-      
-      #optim approach
-      if(Fitting.approach=='optim')
-      {
-        #theta=c(inflx=quantile(d$FL,probs=.6),slop=-5)
-        theta=c(L50=quantile(d$FL,probs=.6),L95=quantile(d$FL,probs=.8))
-        #fit=optim(theta,objfun, hessian=T, control=c(trace=1, maxit=10000))
-        fit=optim(theta,objfun, hessian=T, method="L-BFGS-B",
-                  lower=c(quantile(d$FL,probs=.2),quantile(d$FL,probs=.4)),
-                  upper=c(quantile(d$FL,probs=.9),quantile(d$FL,probs=.9)),control=c(maxit=10000))
-        # fit=optim(theta,objfun, hessian=T, method="L-BFGS-B",lower=c(quantile(d$FL,probs=.2),-50),
-        #           upper=c(quantile(d$FL,probs=.9),-1),control=c(maxit=10000))
-        # 
-        NM=unique(d$COMMON_NAME)[1]
-        newD=seq(min(d$FL),max(d$FL))
-        #PRED=fn.logis(newD,1,fit$par[1],fit$par[2])
-        PRED=fn.logis_L50(newD,1,fit$par[1],fit$par[2])
-        
-        plot(d$FL,d$N,pch=19,ylab="",xlab="",main="")
-        mtext(paste(SPnme," (n=",nrow(d),")",sep=""),3,0,cex=.85)
-        lines(newD,PRED,lwd=2,col="grey50")
-        v_ob=solve(fit$hessian)	#variance covariance matrix
-        std_ob=sqrt(diag(v_ob))
-        TABL=data.frame(SPECIES=NM,L50=fit$par[1],L50_SE=std_ob[1],L95=fit$par[2],L95_SE=std_ob[2])
-        Store[[s]]=TABL
-      }
-      
-      
-      if(show.classification=="YES")
-      {   classify_data = classify_mature(d, varNames = c("FL", "CLASPLENTH"), 
-                                          varSex = "SEX", selectSex = "M", method = "ld")
-      par(mfrow = c(2,2))
-      plot(classify_data)
-      plot(classify_data, xlab = "FL", ylab = "CLASPLENTH")
-      plot(classify_data, xlab = "FL", ylab = "CLASPLENTH",    col = c(2, 3), pch = c(5, 6))
-      
-      plot(classify_data, xlab = "FL", ylab = "CLASPLENTH", col = c(2, 3), pch = c(5, 6), lty_lines = c(1, 2), lwd_lines = c(1, 3), 
-           cex = c(1, 3), main = "Classification")
-      my_ogive_bayes = morph_mature(classify_data, method = "bayes", niter = 1000)
-      print(my_ogive_bayes)
-      par(mfrow = c(2,2))
-      plot(my_ogive_bayes, xlab = "Carapace width (mm.)", ylab = "Proportion mature", col = c("blue", "red"))
-      }
-    }
-    mtext("Fork length (cm)",1,1.5,outer=T,cex=1.5)
-    mtext("Proportion mature",2,1.2,outer=T,las=3,cex=1.5)
-    dev.off()
-    
-    Store=do.call(rbind,Store)
-    write.csv(Store,"L50_pars_male.csv",row.names=F)
-    
-    #3. Running sperm for those with calcified claspers
-    Select.sp=with(subset(Look.at.repro,!is.na(RUN_SPERM) & SEX=="M"),table(SPECIES))
-    Select.sp=Select.sp[Select.sp>=n.min]
-    Sperm_sp=rownames(Select.sp)
-    
-    fn.fig('Fig_male_running_sperm',2400, 2400)    
-    par(mfcol=c(4,4),mar=c(1,1,2,1.2),oma=c(3,3,.1,.1),las=1,mgp=c(.9,.6,0))
-    for(s in 1:length(Sperm_sp))
-    {
-      d=subset(Look.at.repro,SPECIES==Sperm_sp[s] & !is.na(RUN_SPERM) & SEX=="M" & CLASP_CALC=="Y")
-      d$FL=with(d,ifelse(is.na(FL),.85*TL,FL))
-      d=subset(d,!is.na(FL))
-      SPnme=unique(d$COMMON_NAME)[1]
-      d$COL=with(d,ifelse(RUN_SPERM=="Y","black",ifelse(RUN_SPERM=="N","grey80",NA)))
-      plot(d$Month,d$FL,pch=21,col='transparent',cex=1.25,ylab="",xlab="",xlim=c(0.9,13))
-      d1=subset(d,RUN_SPERM=="Y")
-      points(d1$Month,d1$FL,pch=21,bg=d1$COL,cex=1.15)
-      d2=subset(d,RUN_SPERM=="N")
-      points(d2$Month+1.2,d2$FL,pch=21,bg=d2$COL,cex=1.15)
-      NN=nrow(d)
-      mtext(paste(SPnme," (n=",NN,")",sep=""),3,0,cex=.85)
-    }
-    plot(1,ann=F,xaxt='n',yaxt='n',col="transparent")
-    box(col="white")
-    legend("center",c("Y","N"),pch=21,pt.bg=c("black","grey80"),bty='n',title='Sperm presence',cex=1.5)
-    
-    mtext("Month",1,1.5,outer=T,cex=1.5)
-    mtext("Fork length (cm)",2,1.2,outer=T,las=3,cex=1.5)
-    dev.off()
-    
-    #FEMALE ANALYSES   
-    Fem.dat=subset(DATA.bio,SPECIES%in%Reprod.sp & SEX=="F")
-    Fem.dat=subset(Fem.dat,!SPECIES%in%c("BT","PJ","SD","SH","SW","WB","WD","WS","WW"))
-    
-    #Embryo number 
-    #note: NO_UNDEVELOPED refers to embryos that did not develop. Only 5 observations, don't report
-    
-    #if emblen_1 is na, see if data for other emblens..
-    Fem.dat$EMBLEN_1=with(Fem.dat,ifelse(is.na(EMBLEN_1) & !is.na(EMBLEN_2),EMBLEN_2,EMBLEN_1))
-    
-    
-    #fit linear model of the form num. emb = b*FL + a
-    Select.sp=with(subset(Fem.dat,!is.na(NO_EMBRYOS) & SEX=="F"),table(SPECIES))
-    Select.sp=Select.sp[Select.sp>=n.min]
-    Embryo_sp=rownames(Select.sp)
-    
-    Store=vector('list',length(Embryo_sp))  
-    names(Store)=Embryo_sp
-    
-    fn.fig('Fig_female_embryo_number',2400, 2400)    
-    par(mfcol=c(4,3),mar=c(1,1,2,1.2),oma=c(3,3,.1,.1),las=1,mgp=c(.9,.6,0))
-    for(s in 1:length(Embryo_sp))
-    {
-      d=subset(Fem.dat,SPECIES==Embryo_sp[s] & !is.na(NO_EMBRYOS))
-      d$FL=with(d,ifelse(is.na(FL),.85*TL,FL))
-      d=subset(d,!is.na(FL))
-      SPnme=unique(d$COMMON_NAME)[1]
-      plot(d$FL,d$NO_EMBRYOS,pch=19,cex=1.25,ylab="",xlab="",ylim=c(0,max(d$NO_EMBRYOS)))
-      NN=nrow(d)
-      mtext(paste(SPnme," (n=",NN,")",sep=""),3,0,cex=.85)
-      mod=lm(NO_EMBRYOS~FL,d)
-      PRED.d=data.frame(FL=seq(min(d$FL),max(d$FL)))
-      PRED=predict(mod,newdata=PRED.d)
-      lines(PRED.d$FL,PRED,lwd=2,col="grey50")
-      
-      TABL=as.data.frame(summary(mod)$coefficients[,c(1:2,4)])
-      TABL$SPECIES=SPnme
-      TABL=cbind(TABL[1,c(4,1:3)],TABL[2,1:3])
-      names(TABL)[2:7]=c("inflex","inflex.SE","P","slope","slope.SE","P")
-      TABL$"a (SE)"=paste(round(TABL$inflex,2)," (",round(TABL$inflex.SE,2),")",sep="")
-      TABL$"b (SE)"=paste(round(TABL$slope,2)," (",round(TABL$slope.SE,2),")",sep="")
-      Store[[s]]=TABL[,c(1,8,4,9,7)]
-    }
-    mtext("Fork length (cm)",1,1.5,outer=T,cex=1.5)
-    mtext("Number of embryos",2,1.2,outer=T,las=3,cex=1.5)
-    dev.off()
-    Store=do.call(rbind,Store)
-    write.csv(Store,"Female_pups_regression.csv",row.names=F) 
-    
-    #Embryo length vs time
-    Fem.dat$EMBLEN_1=with(Fem.dat,ifelse(UTERINESTG==4,0,EMBLEN_1))
-    Fem.dat$EMBLEN_1=with(Fem.dat,ifelse(!UTERINESTG==4 & EMBLEN_1==0,NA,EMBLEN_1))
-    
-    Select.sp=with(subset(Fem.dat,!is.na(EMBLEN_1) & SEX=="F"),table(SPECIES))
-    Select.sp=Select.sp[Select.sp>=n.min]
-    Embryo_sp=rownames(Select.sp)
-    fn.fig('Fig_female_embryo_length',2400, 2400)    
-    par(mfcol=c(4,4),mar=c(1,1,2,1.2),oma=c(3,3,.1,.1),las=1,mgp=c(.9,.6,0))
-    for(s in 1:length(Embryo_sp))
-    {
-      d=subset(Fem.dat,SPECIES==Embryo_sp[s]&!is.na(EMBLEN_1))
-      SPnme=unique(d$COMMON_NAME)[1]
-      d$COL=with(d,ifelse(UTERINESTG==4,"grey65",ifelse(UTERINESTG==5,"black",NA)))
-      plot(d$Month,d$EMBLEN_1,pch=21,bg=d$COL,cex=1.25,ylab="",xlab="",xlim=c(0.9,13),
-           ylim=c(0,max(d$EMBLEN_1)))
-      mtext(paste(SPnme," (n=",nrow(d),")",sep=""),3,0,cex=.9)
-    }
-    mtext("Month",1,1.5,outer=T,cex=1.5)
-    mtext("Embryo length (cm)",2,1.2,outer=T,las=3,cex=1.5)
-    plot(1,ann=F,xaxt='n',yaxt='n',col="transparent")
-    box(col="white")
-    legend('bottomleft',c("4","5"),pch=21,pt.bg=c("grey65","black"),bty='n',cex=1.5,
-           title="Uterus condition")
-    dev.off()
-    
-    
-    #Embryo length vs Max ova diameter
-    Select.sp=with(subset(Fem.dat,SPECIES%in%Embryo_sp&!is.na(EMBLEN_1) & !is.na(MAXOVRYDIA) & SEX=="F"),table(SPECIES))
-    Select.sp=Select.sp[Select.sp>=n.min]
-    Embryo_sp_ova=rownames(Select.sp)
-    
-    fn.fig('Fig_female_embryo_length_ova_diam',1200, 2400)    
-    par(mfcol=c(3,1),mar=c(1,1,2,1.2),oma=c(3,3,.1,.1),las=1,mgp=c(.9,.6,0))
-    for(s in 1:length(Embryo_sp_ova))
-    {
-      d=subset(Fem.dat,SPECIES==Embryo_sp_ova[s]&!is.na(EMBLEN_1) &!is.na(MAXOVRYDIA))
-      SPnme=unique(d$COMMON_NAME)[1]
-      d$COL=with(d,ifelse(UTERINESTG==4,"grey65",ifelse(UTERINESTG==5,"black",NA)))
-      plot(d$EMBLEN_1,d$MAXOVRYDIA,pch=21,bg=d$COL,cex=1.5,ylab="",xlab="",cex.axis=1.25,
-           ylim=c(0,max(d$MAXOVRYDIA)))
-      mtext(paste(SPnme," (n=",nrow(d),")",sep=""),3,0,cex=1.1)
-    }
-    mtext("Embryo length (cm)",1,1.5,outer=T,cex=1.5)
-    mtext("Maximum ova diameter (cm)",2,1.2,outer=T,las=3,cex=1.5)
-    #plot(1,ann=F,xaxt='n',yaxt='n',col="transparent")
-    #box(col="white")
-    legend('topright',c("4","5"),pch=21,pt.bg=c("grey65","black"),bty='n',cex=1.5,title="Uterus condition")
-    dev.off()
-    
-    
-    #Embryo length -Ova diameter vs time    
-    fn.fig('Fig_female_emblen_ova_diam_time',1400, 2400)    
-    par(mfcol=c(3,1),mar=c(1,1,2,4),oma=c(3,3,.1,1),las=1,mgp=c(.9,.6,0))
-    for(s in 1:length(Ova_sp))
-    {
-      d=subset(Fem.dat,SPECIES==Ova_sp[s] & SEX=="F")
-      d$MAXOVRYDIA=d$MAXOVRYDIA/10   #convert to cm as MOD measured in mm
-      SPnme=unique(d$COMMON_NAME)[1]
-      with(subset(d,!is.na(MAXOVRYDIA)),plot(Month,MAXOVRYDIA,pch=21,bg="grey30",cex=1.75,ylab="",xlab="",xlim=c(0.9,13),
-                                             ylim=c(0,max(MAXOVRYDIA)),cex.axis=1.25))
-      par(new = T)
-      with(subset(d,!is.na(EMBLEN_1)), plot(Month, EMBLEN_1, pch=23, axes=F, xlab=NA, ylab=NA,bg="grey90",cex=1.4,
-                                            ylim=c(0,max(EMBLEN_1)),cex.axis=1.25))
-      axis(side = 4,cex.axis=1.25)
-      mtext(paste(SPnme," (n=",nrow(subset(d,!is.na(MAXOVRYDIA))),")",sep=""),3,0,cex=1)
-    }
-    legend('right',c("ova diam","emb len"),pch=c(21,23),pt.bg=c("grey30","grey90"),bty='n',cex=1.75)
-    
-    mtext("Month",1,1.5,outer=T,cex=1.5)
-    mtext("Maximum ova diameter (cm)",2,1.2,outer=T,las=3,cex=1.5)
-    mtext("Embryo length (cm)",side = 4, -.5,outer=T,las=3,cex=1.5)
-    dev.off()
-    
-    
-    
-    #Embryo Ova diameter vs time
-    Select.sp=with(subset(Fem.dat,!is.na(MAXOVRYDIA) & SEX=="F"),table(SPECIES))
-    Select.sp=Select.sp[Select.sp>=n.min]
-    Ova_sp=rownames(Select.sp)
-    fn.fig('Fig_female_ova_diam',2400, 2400)    
-    par(mfcol=c(4,2),mar=c(1,1,2,1.2),oma=c(3,3,.1,.1),las=1,mgp=c(.9,.6,0))
-    for(s in 1:length(Ova_sp))
-    {
-      d=subset(Fem.dat,SPECIES==Ova_sp[s] & !is.na(MAXOVRYDIA) & SEX=="F")
-      SPnme=unique(d$COMMON_NAME)[1]
-      d$COL=with(d,ifelse(UTERINESTG==4,"grey65",ifelse(UTERINESTG==5,"black",
-                                                        ifelse(UTERINESTG==1,"white",ifelse(UTERINESTG==2,"blue",
-                                                                                            ifelse(UTERINESTG==3,"green",ifelse(UTERINESTG==6,"red",NA)))))))                                   
-      
-      
-      plot(d$Month,d$MAXOVRYDIA,pch=21,bg=d$COL,cex=1.25,ylab="",xlab="",xlim=c(0.9,13),
-           ylim=c(0,max(d$MAXOVRYDIA)))
-      mtext(paste(SPnme," (n=",nrow(d),")",sep=""),3,0,cex=.85)
-    }
-    mtext("Month",1,1.5,outer=T,cex=1.5)
-    mtext("Maximum ova diameter (cm)",2,1.2,outer=T,las=3,cex=1.5)
-    plot(1,ann=F,xaxt='n',yaxt='n',col="transparent")
-    box(col="white")
-    legend('top',as.character(1:6),pch=21,pt.bg=c("white","blue","green","grey65","black","red")
-           ,bty='n',cex=1.25,title="Uterus condition")
-    dev.off()
-    
-    
-    #Maturity 
-    Select.sp=with(subset(Fem.dat,!is.na(UTERINESTG) & SEX=="F"),table(SPECIES))
-    Select.sp=Select.sp[Select.sp>=n.min]
-    MAT_sp=rownames(Select.sp)
-    MAT_sp=MAT_sp[-match(c("CW","GU","MS","WC","TA"),MAT_sp)]
-    Select.sp=with(subset(Fem.dat,!is.na(GON_STAGE) & SEX=="F"),table(SPECIES))
-    id=which(!rownames(Select.sp)%in%MAT_sp)    #no species had GI info but no UI info
-    
-    #2. get L50
-    dat.size.brth=rbind(dat.size.brth,
-                        data.frame(SPECIES=c("HZ","NS","TA"),
-                                   Birth=c(50,35,22)))
-    Fem.dat=merge(Fem.dat,dat.size.brth,by="SPECIES",all.x=T)
-    
-    Store=vector('list',length(MAT_sp))  
-    names(Store)=MAT_sp
-    fn.fig('Fig_female_maturity_fit',1800, 2400)    
-    par(mfcol=c(5,3),mar=c(1,1,2,.9),oma=c(3,3,.1,.1),las=1,mgp=c(.9,.6,0))
-    for(s in 1:length(MAT_sp))
-    {
-      d=subset(Fem.dat,SPECIES==MAT_sp[s] & SEX=="F")
-      d$FL=with(d,ifelse(is.na(FL),.85*TL,FL))
-      d=subset(d,!is.na(FL))
-      d$N=with(d,ifelse(UTERINESTG%in%3:6 ,1,ifelse(UTERINESTG%in%1:2,0,NA)))
-      d$N=with(d,ifelse(is.na(N) & GON_STAGE==3,1,N))
-      d$N=with(d,ifelse(is.na(N) & GON_STAGE%in%c(1,2),0,N))
-      
-      #add dummies to anchor model
-      BirtH=dat.size.brth[s,]$Birth
-      Extra.n=5
-      d.optim=d[1:Extra.n,]
-      d.optim[,]=NA
-      d.optim$FL=seq(BirtH,BirtH*1.1,length.out=Extra.n)
-      d.optim$N=rep(0,Extra.n)
-      
-      d=rbind(d,d.optim)
-      d=subset(d,!is.na(N))
-      
-      if(MAT_sp[s]=="TG") d=subset(d,!(N==1 & FL<200))
-      NM=unique(d$COMMON_NAME)[1]
-      #fit model
-      #binominal glm
-      # mod=glm(N~FL,d,family=binomial())
-      # a=predict(mod,newdata=data.frame(FL=seq(min(d$FL),max(d$FL))),type='response')
-      # lines(seq(min(d$FL),max(d$FL)),a)
-      
-      #nls approach
-      if(Fitting.approach=='nls')
-      {
-        mod <- nls(N~1/(1+exp((FL-inflex)/slope)), data=d,
-                   start=list(inflex=quantile(d$FL,probs=.6), slope=-2),
-                   nls.control(maxiter = 100, tol = 1e-06, minFactor = 1/1024,
-                               printEval = FALSE, warnOnly = T))
-        #L50 and L95 approach
-        #note: L50 == inflex point
-        # mod1 <- nls(N~1/(1+exp(-log(19)*((FL-L50)/(L95-L50)))), data=d, 
-        #                 start=list(L50=quantile(d$FL,probs=.6), L95=quantile(d$FL,probs=.8)),
-        #                 nls.control(maxiter = 100, tol = 1e-06, minFactor = 1/1024,
-        #                             printEval = FALSE, warnOnly = T))
-        
-        
-        newD=data.frame(FL=seq(min(d$FL),max(d$FL)))
-        PRED=predict(mod,newdata=newD)
-        # d$COL=with(d,ifelse(UTERINESTG==4,"grey50",ifelse(UTERINESTG==5,"grey70",
-        #             ifelse(UTERINESTG==3,"grey30",ifelse(UTERINESTG==6,"grey85","white")))))                                   
-        d$COL=1
-        plot(d$FL,d$N,pch=21,ylab="",xlab="",main="",bg=d$COL,ylim=c(0,1))
-        mtext(paste(NM," (n=",nrow(d),")",sep=""),3,0,cex=.85)
-        lines(newD$FL,PRED,lwd=2,col="grey50")
-        
-        TABL=as.data.frame(summary(mod)$coefficients[,c(1:2,4)])
-        TABL$SPECIES=NM
-        TABL=cbind(TABL[1,c(4,1:3)],TABL[2,1:3])
-        names(TABL)[2:7]=c("inflex","inflex.SE","P","slope","slope.SE","P")
-        TABL$"a (SE)"=paste(round(TABL$inflex,2)," (",round(TABL$inflex.SE,2),")",sep="")
-        TABL$"b (SE)"=paste(round(TABL$slope,2)," (",round(TABL$slope.SE,2),")",sep="")
-        Store[[s]]=TABL[,c(1,8,4,9,7)]
-        
-      }
-      
-      #optim approach
-      if(Fitting.approach=='optim')
-      {
-        #theta=c(inflx=quantile(d$FL,probs=.6),slop=-5)
-        theta=c(L50=quantile(d$FL,probs=.6),L95=quantile(d$FL,probs=.8))
-        #fit=optim(theta,objfun, hessian=T, control=c(trace=1, maxit=10000))
-        fit=optim(theta,objfun, hessian=T, method="L-BFGS-B",
-                  lower=c(quantile(d$FL,probs=.2),quantile(d$FL,probs=.4)),
-                  upper=c(quantile(d$FL,probs=.9),quantile(d$FL,probs=.9)),control=c(maxit=10000))
-        # fit=optim(theta,objfun, hessian=T, method="L-BFGS-B",lower=c(quantile(d$FL,probs=.2),-50),
-        #           upper=c(quantile(d$FL,probs=.9),-1),control=c(maxit=10000))
-        # 
-        NM=unique(d$COMMON_NAME)[1]
-        newD=seq(min(d$FL),max(d$FL))
-        #PRED=fn.logis(newD,1,fit$par[1],fit$par[2])
-        PRED=fn.logis_L50(newD,1,fit$par[1],fit$par[2])
-        
-        d$COL=with(d,ifelse(UTERINESTG==4,"grey50",ifelse(UTERINESTG==5,"grey70",
-                                                          ifelse(UTERINESTG==3,"grey30",ifelse(UTERINESTG==6,"grey85","white")))))                                   
-        
-        plot(d$FL,d$N,pch=21,ylab="",xlab="",main="",bg=d$COL,ylim=c(0,1))
-        
-        mtext(paste(SPnme," (n=",nrow(d),")",sep=""),3,0,cex=.85)
-        lines(newD,PRED,lwd=2,col="grey50")
-        v_ob=solve(fit$hessian)	#variance covariance matrix
-        std_ob=sqrt(diag(v_ob))
-        TABL=data.frame(SPECIES=NM,L50=fit$par[1],L50_SE=std_ob[1],L95=fit$par[2],L95_SE=std_ob[2])
-        Store[[s]]=TABL
-      }
-      
-      
-      if(show.classification=="YES")
-      {   classify_data = classify_mature(d, varNames = c("FL", "CLASPLENTH"), 
-                                          varSex = "SEX", selectSex = "M", method = "ld")
-      par(mfrow = c(2,2))
-      plot(classify_data)
-      plot(classify_data, xlab = "FL", ylab = "CLASPLENTH")
-      plot(classify_data, xlab = "FL", ylab = "CLASPLENTH",    col = c(2, 3), pch = c(5, 6))
-      
-      plot(classify_data, xlab = "FL", ylab = "CLASPLENTH", col = c(2, 3), pch = c(5, 6), lty_lines = c(1, 2), lwd_lines = c(1, 3), 
-           cex = c(1, 3), main = "Classification")
-      my_ogive_bayes = morph_mature(classify_data, method = "bayes", niter = 1000)
-      print(my_ogive_bayes)
-      par(mfrow = c(2,2))
-      plot(my_ogive_bayes, xlab = "Carapace width (mm.)", ylab = "Proportion mature", col = c("blue", "red"))
-      }
-    }
-    
-    # plot(1,ann=F,xaxt='n',yaxt='n',col="transparent")
-    # box(col="white")
-    # legend('top',c("Immature","UI 3","UI 4","UI 5","UI 6"),pch=21,
-    #        pt.bg=c("white","grey30","grey50","grey70","grey85"),bty='n',cex=1.25)
-    mtext("Fork length (cm)",1,1.5,outer=T,cex=1.5)
-    mtext("Proportion mature",2,1.2,outer=T,las=3,cex=1.5)
-    dev.off()
-    
-    Store=do.call(rbind,Store)
-    write.csv(Store,"L50_pars_female.csv",row.names=F)
-  }
+#3. Export Reproduction and Diet data for Georgina -------------------------------------------------------------------------
+write.csv(Look.at.repro%>%left_join(DATA.bio%>%
+                                      filter(SHEET_NO%in%unique(Look.at.repro$SHEET_NO))%>%
+                                      distinct(SHEET_NO,Mid.Lat,Mid.Long,date.x),by='SHEET_NO'),
+          handl_OneDrive('Analyses/Surveys/Naturaliste_longline/Data for Georgina/Look.at.repro.csv'),row.names = F)
+write.csv(Fem.dat, handl_OneDrive('Analyses/Surveys/Naturaliste_longline/Data for Georgina/Fem.dat.csv'),row.names = F)
+write.csv(Diet%>%left_join(DATA.bio%>%
+                             filter(SHEET_NO%in%unique(Diet$SHEET_NO))%>%
+                             distinct(SHEET_NO,Mid.Lat,Mid.Long,date.x),by='SHEET_NO'),
+          handl_OneDrive('Analyses/Surveys/Naturaliste_longline/Data for Georgina/Diet.csv'),row.names = F)
+write.csv(Rel.dat,handl_OneDrive('Analyses/Surveys/Naturaliste_longline/Data for Georgina/Rel.dat.csv'),row.names = F)
 
 
-
-#3. DIET  
-#note: diet analyses based on frequency of occurrence only (weight/number prey not available/reliable
-#  MISSING: if using tropics only (survey), not enough samples; separate tropical from subtropical;
-#             report size distribution; map of where samples from
-#             Separate some species into large, small? (e.g dusky) see Papastamatiou et al 2006
-#        minimum sample size: 10
-#            Also, among species comparisons should be meaningful (e.g. same location/shot)
-
-if(Do.diet=="YES")
-{
-  Diet=subset(Diet,!COMMON_NAME=="Parrotfish (general)")
-  Dummy.2=Dummy
-  Dummy.2[Dummy.2>0]=1
-  Look=sort(colSums(Dummy.2))
-  DieT=Dummy.2[match("STMCH_CONT",row.names(Dummy.2)),]
-  DieT=sort(DieT)
-  DieT=subset(DieT,DieT>0)
-  DieT=names(DieT)
-  Look.at.diet=subset(DATA.bio,SPECIES%in%DieT & !is.na(STMCH_CONT),select=c(SPECIES,SHEET_NO,TL,FL,SEX,STMCH_CONT,STMCH_FULL,
-                                   COMMON_NAME,SCIENTIFIC_NAME,year))
-  Look.at.diet=subset(Look.at.diet,year==Current.Yr)
-  Look.at.diet=Look.at.diet[,-match("year",names(Look.at.diet))]
-  if(User=="Matias") setwd(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Diet"))
-  if(User=="Dani") setwd("whatever")
-  write.csv(Look.at.diet,"Look.at.diet_all_sp.csv",row.names=F)
-  
-  if(User=="Matias") HNDL.diet=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Diet/")
-  if(User=="Dani") HNDL.diet="whatever"
-  
-  Not.prey=c("SHEET_NO","COMMON_NAME","SCIENTIFIC_NAME","SPECIES","SEX","TL","FL","STMCH_FULL","STMCH_CONT")
-  Prey=colnames(Diet)[-match(Not.prey,colnames(Diet))]
-  id=colSums(Diet[,Prey],na.rm=T)
-  id=subset(id,id==0)
-  if(length(id)>0)
-  {
-    Diet=Diet[,-match(names(id),names(Diet))]
-    Prey=colnames(Diet)[-match(Not.prey,colnames(Diet))]
-  }
-  
-  #Calculate frequency of occurrence by prey for each shark species
-  Spec.names=read.csv("Spec.names.csv",stringsAsFactors=F)
-  Diet=Diet[,-match("COMMON_NAME",names(Diet))]
-  Diet=merge(Diet,Spec.names,by="SPECIES",all.x=T)
-  Diet$SPECIES=as.character(Diet$SPECIES)
-  
-  #tropical
-  Tropics=-23.43697
-  Rel.dat=subset(DATA.bio,SHEET_NO%in%unique(Diet$SHEET_NO),select=c(SHEET_NO,Mid.Lat, Mid.Long, Lat.round, Long.round))
-  Rel.dat=Rel.dat[!duplicated(Rel.dat$SHEET_NO),]
-  Tropical=subset(Rel.dat,Lat.round>=(-23.5))
-  #Diet=subset(Diet,SHEET_NO%in%unique(Tropical$SHEET_NO))
-  
-  Diet.dat=data.table(Diet[,match(c("SPECIES",Prey),names(Diet))])
-  Table.diet=Diet.dat[, lapply(.SD, sum,na.rm=T), by=SPECIES]     #aggregate all prey by species
-  N.stom=table(Diet$SPECIES)
-  N.stom=N.stom[match(Table.diet$SPECIES,names(N.stom))]
-  N.STOM=matrix(N.stom,nrow=nrow(Table.diet[,2:ncol(Table.diet)]),ncol=ncol(Table.diet[,2:ncol(Table.diet)]))
-  Table.diet[,2:ncol(Table.diet)]=100*Table.diet[,2:ncol(Table.diet)]/N.STOM
-  
-  Table.diet.prey.group=Diet[,-match(c("SHEET_NO","COMMON_NAME",
-            "SCIENTIFIC_NAME","SEX","TL","FL","STMCH_FULL","STMCH_CONT"),names(Diet))]
-  ID_Prey_TL2=match(colnames(Table.diet.prey.group)[-1],Prey_cnvrsn$Prey)
-  colnames(Table.diet.prey.group)[2:ncol(Table.diet.prey.group)]=as.character(Prey_cnvrsn$Prey_TL[ID_Prey_TL2])
-  Prey.groups=unique(as.character(Prey_cnvrsn$Prey_TL))
-  Agg.diet=as.data.frame(matrix(nrow=nrow(Table.diet.prey.group),ncol=(1+length(Prey.groups))))
-  colnames(Agg.diet)=c("SPECIES",Prey.groups)
-  Agg.diet$SPECIES=Table.diet.prey.group$SPECIES
-  for(x in 1:length(Prey.groups))
-  {
-    d=Table.diet.prey.group[,which(names(Table.diet.prey.group)==Prey.groups[x])]
-    if(is.data.frame((d)))dd=rowSums(d,na.rm=T)
-    if(is.integer(d))dd=d
-    dd[dd>0]=1
-    Agg.diet[,x+1]=dd
-  }
-  Agg.diet=data.table(Agg.diet)
-  Agg.diet=Agg.diet[, lapply(.SD, sum,na.rm=T), by=SPECIES]
-  N.STOM=matrix(N.stom,nrow=nrow(Agg.diet[,2:ncol(Agg.diet)]),ncol=ncol(Agg.diet[,2:ncol(Agg.diet)]))
-  Agg.diet[,2:ncol(Agg.diet)]=100*Agg.diet[,2:ncol(Agg.diet)]/N.STOM
-  
-  Diet.Table1=cbind(Table.diet,N.STOM[,1])
-  names(Diet.Table1)[ncol(Diet.Table1)]="Sample size"
-  Diet.Table1[,2:(ncol(Diet.Table1)-1)]=round(Diet.Table1[,2:(ncol(Diet.Table1)-1)],3)
-  Diet.Table1=Diet.Table1[order(-Diet.Table1$"Sample size"),]
-  
-  SP.nm=Diet[,match(c("COMMON_NAME","SCIENTIFIC_NAME","SPECIES"),names(Diet))]
-  SP.nm=SP.nm[!duplicated(SP.nm$SPECIES),]
-  Diet.Table1=merge(SP.nm,Diet.Table1,by="SPECIES")
-  
-  write.csv(Diet.Table1,paste(HNDL.diet,"Table1.csv",sep=""),row.names=F)
-  
-  
-  #Pie charts   
-  
-    #aggregated prey
-  Agg.diet=Agg.diet[order(Agg.diet$Teleost,Agg.diet$Cephalopods),]
-  SpEcis=as.character(unique(Agg.diet$SPECIES))
-  
-  #colfunc <- colorRampPalette(c("black", "white"))
-  #all.ColS.pie=colfunc(length(Prey.groups))
-  all.ColS.pie=c("grey60","grey20","grey40","grey50","white",
-                 "grey80","grey70","grey28","grey90","black")
-  all.ColS.pie=data.frame(col=all.ColS.pie,Prey=Prey.groups)
-  
-  fn.pie=function(SP)
-  {
-    A=as.data.frame(subset(Agg.diet,SPECIES==SP))
-    N=subset(Diet.Table1,SPECIES==SP)
-    SPec=as.character(N$COMMON_NAME)
-    N=N$'Sample size'
-    A=A[,-match("SPECIES",names(A))]
-    id=which(A>0)
-    ColS.pie=all.ColS.pie[id,]
-    A=A[,id]
-    pie(unlist(A), labels = "", col = as.character(ColS.pie$col),border="transparent",main="")
-    mtext(paste(SPec," (n= ",N,") ",sep=""),3,-1,cex=.7)
-    
-  }
-  fn.fig(paste(HNDL.diet,"Pie_occurrence",sep=""),2400, 2400)  
-  par(mfrow=c(6,4), mar=c(.1,.1,.1,0.5), mgp = c(1.5, 0.3, 0), tck = -0.01)
-  for(i in 1:length(SpEcis))fn.pie(SP=SpEcis[i])
-  plot(1:1,ann=F,col="transparent",axes=F)
-  legend("center", as.character(all.ColS.pie$Prey), cex = 1, 
-                     fill = as.character(all.ColS.pie$col),bty='n')
-  dev.off()
-  
-      #high resolution prey species
-  # fn.pie=function(SP)
-  # {
-  #   A=subset(Diet.Table1,SPECIES==SP)
-  #   N=A$'Sample size'
-  #   SPec=A$COMMON_NAME
-  #   A1=A[,-match(c("SPECIES","COMMON_NAME","SCIENTIFIC_NAME",'Sample size'),names(A))]
-  #   ColS.pie=rainbow(ncol(A1))
-  #   ColS.pie=data.frame(col=ColS.pie,Prey=colnames(A1))
-  #   id=which(A1>0)
-  #   ColS.pie=ColS.pie[id,]
-  #   A1=A1[,id]
-  #   pie(unlist(A1), labels = colnames(A1), col = as.character(ColS.pie$col),border="white",
-  #       main=paste(SPec," (n= ",N,") ",sep=""))
-  # }
-  # par(mfrow=c(6,4), mar=c(.1,.1,.1,0.5), mgp = c(1.5, 0.3, 0), tck = -0.01)
-  # for(i in 1:length(SpEcis))fn.pie(SP=SpEcis[i])
-  
-
-  #Calculate trophic level
-  Prey_TL=subset(Prey_TL, Prey%in%names(Agg.diet)[-1])
-  Prey_TL=Prey_TL[order(Prey_TL$TL),]
-  Agg.diet=as.data.frame(Agg.diet)
-  Agg.diet=Agg.diet[,match(c("SPECIES",as.character(Prey_TL$Prey)),names(Agg.diet))]
-  PREDATORS=as.character(Agg.diet$SPECIES)
-  Troph.rel=Agg.diet[,-match(c("SPECIES"),names(Agg.diet))]
-  
-  PREY=Prey_TL$Prey
-  fn.TL=function(d)
-  {
-    d=d[,-1]
-    Nms=colnames(d)
-    d=data.frame(t(d))
-    colnames(d)="FO"
-    d$Prey=Nms
-    d=merge(d,Prey_TL,by="Prey",all.x=T)
-    d$Prop=d$FO/sum(d$FO)    #get proportion
-    TL=1+ sum(d$Prop*d$TL)
-    return(TL)
-  }
-  Predator.TL=data.frame(SPECIES=PREDATORS,TL=NA)
-  for(i in 1:length(PREDATORS)) Predator.TL$TL[i]=fn.TL(d=subset(Agg.diet,SPECIES==PREDATORS[i]))
-  
-  a=subset(Diet.Table1,select=c(SPECIES,COMMON_NAME))
-  a=a[!duplicated(a$SPECIES),]
-  Predator.TL=merge(Predator.TL,a,by="SPECIES",all.x=T)
-  
-    
-  
-  # #use these files Predator_TL Prey_TL
-  # TL.pred=PREDATORS               # Predator_TL hast theoretical TL for these species 
-  # names(TL.pred)=PREDATORS
-  # TL.pred=runif(length(TL.pred),3.5,5.5)
-  # TL.prey=PREY                    #DUMMY, change accordingly:  use this file Prey_TL
-  # names(TL.prey)=PREY
-  # TL.prey=runif(length(TL.prey),1,3)
-  
-  #Show trophic links
-  function.plot.TL=function(DieT,TL.pred,TL.prey,scaler)
-  {
-    #Locations on X axis
-    MaxX=max(dim(DieT))
-    Location.pred=seq(1,MaxX,length.out=nrow(DieT))
-    names(Location.pred)=PREDATORS
-    Location.prey=seq(1,MaxX,length.out=ncol(DieT))
-    names(Location.prey)=colnames(Agg.diet)[-1]
-    
-    #set things up
-    plot(1,1,col="transparent",xlim=c(0,MaxX*1.1),
-        ylim=c(min(TL.prey$TL)*.9,1.1*max(c(TL.pred$TL,TL.prey$TL))),
-         ylab="",xlab="",xaxt="n")
-    TL.pred=TL.pred[match(PREDATORS,TL.pred$SPECIES),]
-    TL.prey=TL.prey[match(names(Location.prey),TL.prey$Prey),]
-    
-    #plot trophic links based on FO
-    for(r in 1:nrow(DieT))
-    {
-      dd=DieT[r,]*scaler
-       from.x=Location.pred[r]
-      from.y=TL.pred$TL[r]
-      to.x=Location.prey
-      to.y=TL.prey$TL
-      
-      CL=dd
-      CL[CL>0]="black"
-      CL[CL=="0"]="transparent"
-      CL=unlist(CL)
-      arrows(rep(from.x,length(to.x)),rep(from.y,length(to.y)),to.x,to.y,lwd=dd,col=CL,length = 0.15)
-    }
-    
-    #plot predator
-    text(Location.pred,TL.pred$TL,PREDATORS,pos=3,offset = .2,srt=45)
-    
-    #plot prey
-    text(Location.prey,TL.prey$TL,TL.prey$Prey,pos=1,offset = .1,srt=-15)
-    
-    
-  }
-  fn.fig(paste(HNDL.diet,"Trophic_links",sep=""),2400, 1200)    
-  par(mfcol=c(1,1),mar=c(1.5,2.5,.1,.1),oma=c(.1,.2,.1,.2),las=1,mgp=c(1.9,.55,0))
-  function.plot.TL(DieT=Troph.rel/100,TL.pred=Predator.TL,TL.prey=Prey_TL,scaler=3)
-  mtext("Trophic level",2,1.5,las=3,cex=1.5)
-  mtext("Prey",1,0.5,cex=1.5)
-  dev.off()
-  
-  
-  #ACA
-  
-  #Dietary overlap based on Simplified Morisita index with diet expressed as proportions
-  
-  
-  #Generalist-Specialist spectrum / Prey diversity indices / Omnivory index  / Size of shark  /home range ( Roff et al 2016)
-
-  
-  #Map density distribution of shots to put study in context
-  
-  
-  #size distribution of species
-  
-  
-}
-
-
-
-
-
-
-
-
+# Analsyes are done in 'Surveys_analysis_other_Georgina.r'
