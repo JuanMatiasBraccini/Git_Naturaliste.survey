@@ -455,8 +455,9 @@ if(check.new.years.Nat.survey)
     xlim(2000,2023)
   
 }
-# Plot sex spatial distribution for SS3 modelling -------------------------------------------------------
+# Plot spatial distribution for SS3 modelling -------------------------------------------------------
 DO.DIS=FALSE
+#sex
 if(DO.DIS)
 {
   Check.this.sp=with(DATA%>%
@@ -517,7 +518,58 @@ if(DO.DIS)
   for(s in 1:length(Check.this.sp)) fn.spatio.temp_sex.for.SS(SPe=names(Check.this.sp)[s])
   
 }
-
+#size comps
+if(DO.DIS)
+{
+  Check.this.sp=with(DATA%>%
+                       filter(Mid.Lat>(-26) & TYPE=='Elasmo'),table(SPECIES))
+  Check.this.sp=Check.this.sp[Check.this.sp>40]
+  fn.size.freq.year.for.SS=function(SPe,Fixed.Stations)
+  {
+    d=DATA%>%
+      filter(year>=2001 & Mid.Lat>(-25) & SPECIES==SPe)%>%
+      mutate(LAT=round(Mid.Lat,1),
+             LONG=round(Mid.Long,1))%>%
+      filter(!is.na(LONG))%>%
+      filter(BOAT=='NAT' & Method=='LL')
+    
+    NM=unique(d$COMMON_NAME)
+    
+    p1=d%>%
+      distinct(LONG,LAT,year)%>%
+      ggplot(aes(LONG,LAT))+
+      geom_point()+
+      facet_wrap(~year)+theme_PA()
+    print(p1)
+    ggsave(handl_OneDrive(paste0("Analyses/Surveys/Naturaliste_longline/outputs/Size distribution/",
+                                 NM,"_shots.tiff")), width = 8,height = 8,compression = "lzw")
+    
+    Table.depth=table(d$year,10*round(d$BOTDEPTH/10))
+    write.csv(Table.depth,handl_OneDrive(paste0("Analyses/Surveys/Naturaliste_longline/outputs/Size distribution/",
+                                                NM,"_Shot depth by year.csv")))
+    Table.month=table(d$year,d$Month)
+    write.csv(Table.month,handl_OneDrive(paste0("Analyses/Surveys/Naturaliste_longline/outputs/Size distribution/",
+                                                NM,"_Shot month by year.csv")))
+    
+    p2=d%>%
+      filter(!is.na(FL))%>%
+      mutate(FL.bin=10*(floor(FL/10)))%>%
+      mutate(year=as.character(year))%>%
+      group_by(FL.bin,year)%>%
+      tally()%>%
+      ggplot(aes(FL.bin,n))+
+      geom_line()+
+      facet_wrap(~year,scales='free_y')+theme_PA()+
+      geom_vline(xintercept = mean(d$FL,na.rm=T),color='red')
+    print(p2)
+    ggsave(handl_OneDrive(paste0("Analyses/Surveys/Naturaliste_longline/outputs/Size distribution/",
+                                 NM,".tiff")), width = 8,height = 8,compression = "lzw")
+    
+    
+  }
+  for(s in 1:length(Check.this.sp)) fn.size.freq.year.for.SS(SPe=names(Check.this.sp)[s])
+  
+}
 
 # PROCEDURE SECTION -------------------------------------------------------
 
@@ -3299,8 +3351,8 @@ if(Do.abundance=="YES")
     
     Store[[i]]=fit.best(d=d,FORMULA=BEST.model[[i]],ErroR=ERROR.st[[i]])
     rm(DAT,TT,d)
-  })
-  
+  }) 
+  Store.out.dis.size=Store
   #Is there a non-linear relation in residuals that requires GAM?    NOT applicable anymore as I am already using GAMs....
   #note: if Pearson residuals vs the covariate shows a clear pattern 
   #       (i.e. Significant Anova), then GAM is needed (i.e. covariates
@@ -5510,7 +5562,7 @@ if(Do.abundance=="YES")
     mtext(Tar.names[i],3,line=.05,cex=1.1)
   }
 
-  #5. Export abundance index   
+  #5. Export abundance index for population dynamics modelling (SS3)   
       #Fixed stations
   hnd.indx=handl_OneDrive("Analyses/Data_outs/")
   for(i in 1:length(INDEX.absolute)) write.csv(INDEX.absolute[[i]],paste(hnd.indx,names(INDEX)[i],'/',names(INDEX)[i],".Srvy.FixSt.csv",sep=""),row.names=F)
@@ -5565,7 +5617,7 @@ if(Do.abundance=="YES")
     dummy$LOW=dummy$lower.CL
     dummy$CV=100*dummy$SE/dummy$MEAN
     INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points")
-    INDEX.size.absolute[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="NO",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points",pLOT=FALSE) #ACA
+    INDEX.size.absolute[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="NO",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points",pLOT=FALSE) 
     
 
     #add observed mean size and size at maturity
@@ -5610,13 +5662,16 @@ if(Do.abundance=="YES")
   mtext("Year",1,outer=T,line=.25,cex=1.5)
   dev.off()
   
-  #10. Export size raw data   
+  #10. Export size raw data  for population dynamics modelling (SS3)  
   for(i in 1:length(TARGETS))
   {
+    dis.sheet.n=Store.out.dis.size[[i]]$DAT
     dd=DATA%>%
       filter(BOAT=='NAT' & Method=='LL' & SPECIES==TARGETS[i] & !is.na(FL))%>%
       mutate(FINYEAR=ifelse(Month>6,paste(year,substr(year+1,3,4),sep='-'),
-                            paste(year-1,substr(year,3,4),sep='-')))
+                            paste(year-1,substr(year,3,4),sep='-')))%>%
+      filter(SHEET_NO%in%unique(dis.sheet.n$SHEET_NO))  #only use same data used in standardisation
+    
     #observations
     N.obs=dd%>%
       group_by(FINYEAR,SPECIES)%>%
