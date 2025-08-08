@@ -5662,7 +5662,7 @@ if(Do.abundance=="YES")
   mtext("Year",1,outer=T,line=.25,cex=1.5)
   dev.off()
   
-  #10. Export size raw data  for population dynamics modelling (SS3)  
+  #10. Export size raw data  for population dynamics modelling (SS3)  #ACA
   for(i in 1:length(TARGETS))
   {
     dis.sheet.n=Store.out.dis.size[[i]]$DAT
@@ -5671,14 +5671,14 @@ if(Do.abundance=="YES")
       mutate(FINYEAR=ifelse(Month>6,paste(year,substr(year+1,3,4),sep='-'),
                             paste(year-1,substr(year,3,4),sep='-')))%>%
       filter(SHEET_NO%in%unique(dis.sheet.n$SHEET_NO))  #only use same data used in standardisation
-    
+    if(TARGETS[i]=="TK") dd=dd%>%filter(!year==2002)  #different sampling
     #observations
     N.obs=dd%>%
       group_by(FINYEAR,SPECIES)%>%
       tally()%>%
       rename(N.observations=n)
     N.shots=dd%>%
-      distinct(SHEET_NO,.keep_all = T)%>%
+      distinct(date,.keep_all = T)%>%
       group_by(FINYEAR,SPECIES)%>%
       tally()%>%
       rename(N.shots=n)
