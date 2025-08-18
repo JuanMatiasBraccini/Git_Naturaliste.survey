@@ -74,6 +74,7 @@ library(foreach)
 library(doParallel)
 library(imputeTS)
 library(ggrepel)
+library(ggpubr)
 
 #install.packages("countreg", repos = "http://R-Forge.R-project.org")
 #see great vignette: https://cran.r-project.org/web/packages/pscl/vignettes/countreg.pdf
@@ -87,7 +88,8 @@ source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Compare.error.structure
 source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_Population.dynamics/fn.fig.R"))
 source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_other/Smart_par.R"))
 source(handl_OneDrive('Analyses/SOURCE_SCRIPTS/Git_other/ggplot.themes.R'))  #my themes
-
+source(handl_OneDrive('Analyses/Catch and effort/Git_catch.and.effort/CPUE_Auxiliary functions.R'))
+source(handl_OneDrive("Analyses/SOURCE_SCRIPTS/Git_Population.dynamics/Nominal_cpue_functions.R"))
 #Species names
 SPECIES.names=read.csv(handl_OneDrive("Data/Species.code.csv"),stringsAsFactors=FALSE, fileEncoding="latin1")
 
@@ -134,7 +136,8 @@ PerthIs=read.table(handl_OneDrive("Data/Mapping/WAislandsPointsNew.txt"), header
 Rottnest.Is=subset(PerthIs,ID%in%c("ROTT1"))
 Garden.Is=subset(PerthIs,ID%in%c("ROTT3"))
 
-
+#Life history
+LH.data=read.csv(handl_OneDrive('Data/Life history parameters/Life_History.csv'))
 
 # CONTROL SECTION ---------------------------------------------------------
 
@@ -790,17 +793,16 @@ Blk.tps=c("Carcharhinus limbatus","Carcharhinus limbatus/tilstoni","Carcharhinus
 
 DATA$SPECIES.old=DATA$SPECIES
 DATA.DL$SPECIES.old=DATA.DL$SPECIES
-DATA$SPECIES=with(DATA,ifelse(SPECIES=="BL","BT",SPECIES))
-DATA.DL$SPECIES=with(DATA.DL,ifelse(SPECIES=="BL","BT",SPECIES))
-
-DATA$SPECIES=with(DATA,ifelse(SPECIES=="BL","BT",SPECIES))
-DATA.DL$SPECIES=with(DATA.DL,ifelse(SPECIES=="BL","BT",SPECIES))
-
-DATA$COMMON_NAME=with(DATA,ifelse(COMMON_NAME=="Common blacktip shark","Blacktip sharks",COMMON_NAME))
-DATA.DL$COMMON_NAME=with(DATA.DL,ifelse(COMMON_NAME=="Common blacktip shark","Blacktip sharks",COMMON_NAME))
-
-DATA$SCIENTIFIC_NAME=with(DATA,ifelse(SCIENTIFIC_NAME=="Carcharhinus limbatus/tilstoni","Carcharhinus limbatus",SCIENTIFIC_NAME))
-DATA.DL$SCIENTIFIC_NAME=with(DATA.DL,ifelse(SCIENTIFIC_NAME=="Carcharhinus limbatus/tilstoni","Carcharhinus limbatus",SCIENTIFIC_NAME))
+DATA=DATA%>%
+       mutate(SPECIES=ifelse(SPECIES=="BL","BT",SPECIES),
+              CAAB_code=ifelse(SPECIES=="BT",18017,CAAB_code),
+              COMMON_NAME=ifelse(SPECIES=="BT","Blacktip sharks",COMMON_NAME),
+              SCIENTIFIC_NAME=ifelse(SPECIES=="BT","Carcharhinus limbatus/tilstoni",SCIENTIFIC_NAME))
+DATA.DL=DATA.DL%>%
+  mutate(SPECIES=ifelse(SPECIES=="BL","BT",SPECIES),
+         CAAB_code=ifelse(SPECIES=="BT",18017,CAAB_code),
+         COMMON_NAME=ifelse(SPECIES=="BT","Blacktip sharks",COMMON_NAME),
+         SCIENTIFIC_NAME=ifelse(SPECIES=="BT","Carcharhinus limbatus/tilstoni",SCIENTIFIC_NAME))
 
 
 #Fix N.hook numbers
@@ -1015,6 +1017,78 @@ DATA$depth.bin=10*round(DATA$BOTDEPTH/10)
 DATA$TEMP1.bin=floor(DATA$TEMP1)
 DATA$Mid.Lat.bin=floor(abs(DATA$Mid.Lat))
 
+#Add life history pars 
+DATA=DATA%>%
+  left_join(LH.data%>%
+              dplyr::select(SPECIES,a_w8t,b_w8t,male_a_w8t,male_b_w8t,w8t_length.units,
+                            a_FL.to.TL,b_FL.to.TL,TL.50.mat,TL.95.mat,Max.TL)%>%
+              filter(SPECIES%in%unique(DATA$CAAB_code)),
+            by=c('CAAB_code'='SPECIES'))
+
+#Calculate individual weight  
+DATA=DATA%>%
+  mutate(TL.dumy=TL,
+         SEX.dummy=ifelse(is.na(SEX),'F',SEX),
+         TL.dumy=ifelse(is.na(TL)& !is.na(FL),FL*a_FL.to.TL+b_FL.to.TL,TL.dumy),
+         TL.dumy=ifelse(TL.dumy>Max.TL,NA,TL.dumy),
+         Twt=ifelse(COMMON_NAME%in%TARGETS.name & SEX.dummy=='F',a_w8t*TL.dumy^b_w8t,
+            ifelse(COMMON_NAME%in%TARGETS.name & SEX.dummy=='M',male_a_w8t*TL.dumy^male_b_w8t,
+            NA)))
+DATA=DATA%>%
+      group_by(COMMON_NAME)%>%
+      mutate(Twt.average=mean(Twt,na.rm=T))%>%
+      ungroup()%>%
+      mutate(Twt=ifelse(COMMON_NAME%in%TARGETS.name & is.na(Twt),Twt.average,Twt))
+
+DATA%>%
+  filter(COMMON_NAME%in%TARGETS.name)%>%
+  ggplot(aes(TL.dumy,Twt,color=SEX.dummy))+
+  geom_point()+
+  facet_wrap(~COMMON_NAME,scales='free')+xlab('TL (cm)')+ylab('Twt (kg)')+
+  theme_PA()+theme(legend.position = 'top',legend.title = element_blank())
+ggsave(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance/Reconstructed_Twt_targets.tiff"),
+       width = 8,height = 8,compression = "lzw")
+
+
+DATA%>%
+  filter(COMMON_NAME%in%TARGETS.name)%>%
+  ggplot(aes(FL,TL.dumy,color=SEX.dummy))+
+  geom_point()+
+  facet_wrap(~COMMON_NAME,scales='free')+
+  theme_PA()+theme(legend.position = 'top',legend.title = element_blank())
+ggsave(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance/Reconstructed_TL_targets.tiff"),
+       width = 8,height = 8,compression = "lzw")
+
+
+
+DATA=DATA%>%
+  dplyr::select(-c(TL.dumy,SEX.dummy,Twt.average,
+                   a_w8t,b_w8t,male_a_w8t,male_b_w8t,w8t_length.units))
+
+#extract FL50% maturity list   
+Fem.Size.Mat=list()
+Fem.Size.Mat$"Sandbar shark"=135
+Fem.Size.Mat$"Milk shark"=66
+Fem.Size.Mat$"Spot-tail shark"=76
+Fem.Size.Mat$"Tiger shark"=260 
+Fem.Size.Mat$"Blacktip sharks"=99 
+Fem.Size.Mat$"Scalloped hammerhead"=210  
+Fem.Size.Mat$"Dusky shark"=254
+Fem.Size.Mat$"Sliteye shark"=60
+Fem.Size.Mat$"Great hammerhead"=220
+Fem.Size.Mat$"Silvertip shark"=195  
+Fem.Size.Mat$"Pigeye shark"=215
+Fem.Size.Mat$"Whitespot shovelnose"=155  
+Fem.Size.Mat$"Grey reef shark"=135
+Fem.Size.Mat$"Lemon shark"=220
+for(f in 1:length(Fem.Size.Mat))  #replace with data from Life history table
+{
+  dis.mat=DATA%>%
+          filter(COMMON_NAME==names(Fem.Size.Mat)[f])%>%
+          distinct(TL.50.mat,a_FL.to.TL,b_FL.to.TL)%>%
+          mutate(FL.50.mat=(TL.50.mat-b_FL.to.TL)/a_FL.to.TL)
+  Fem.Size.Mat[[f]]=floor(dis.mat%>%pull(FL.50.mat))
+}
 
 # 1. CATCH RATES FROM FISHERY INDEPENDENT SURVEYS ----------------------------------------------------------------------
 #References: Zuur et al. Zero inflated models and generalized linear mixed models with R
@@ -1059,23 +1133,7 @@ if(Do.abundance=="YES")
   
   Tar.names=TARGETS.name
   
-  #add 50% maturity
-  Fem.Size.Mat=list()
-  Fem.Size.Mat$"Sandbar shark"=135
-  Fem.Size.Mat$"Milk shark"=66
-  Fem.Size.Mat$"Spot-tail shark"=76
-  Fem.Size.Mat$"Tiger shark"=260 
-  Fem.Size.Mat$"Blacktip sharks"=99
-  Fem.Size.Mat$"Scalloped hammerhead"=210  
-  Fem.Size.Mat$"Dusky shark"=254
-  Fem.Size.Mat$"Sliteye shark"=60
-  Fem.Size.Mat$"Great hammerhead"=220
-  Fem.Size.Mat$"Silvertip shark"=195
-  Fem.Size.Mat$"Pigeye shark"=215
-  Fem.Size.Mat$"Whitespot shovelnose"=155
-  Fem.Size.Mat$"Grey reef shark"=135
-  Fem.Size.Mat$"Lemon shark"=220
-  
+  #select relevant maturity data
   iDs=match(TARGETS.name,names(Fem.Size.Mat))
   Fem.Size.Mat=Fem.Size.Mat[iDs]
   
@@ -1121,7 +1179,7 @@ if(Do.abundance=="YES")
   #1.5    Put data as list and get 0 shots
   DATA.list=vector("list",length=N.species)
   names(DATA.list)=TARGETS.name
-  Prop.Ktch.list=Nom.dummy=DATA.list
+  Prop.Ktch.list=Nom.dummy=DATA.list.w=DATA.list
   
   # #species ranges                             
   # DISTRIB$"Dusky shark"=c(-25.7,-17.35)
@@ -1167,8 +1225,10 @@ if(Do.abundance=="YES")
     DAT=subset(DAT,!is.na(SPECIES))
     
     DAT=subset(DAT,year>2001)  #only 1 shot done during May:August in 2001
+    
     #target species catch 
     DAT$Catch.Target=with(DAT,ifelse(SPECIES==target,Number,0))
+    DAT$Catch.Target.w=with(DAT,ifelse(SPECIES==target,Twt,0))
     
     #other species catch
     DAT$Catch.Dusky=with(DAT,ifelse(SPECIES=="BW",Number,0))
@@ -1179,26 +1239,50 @@ if(Do.abundance=="YES")
     DAT$Catch.SpotTail=with(DAT,ifelse(SPECIES=="SO",Number,0))
     DAT$Catch.Milk=with(DAT,ifelse(SPECIES=="MI",Number,0))
     
+    DAT$Catch.Dusky.w=with(DAT,ifelse(SPECIES=="BW",Twt,0))
+    DAT$Catch.Sandbar.w=with(DAT,ifelse(SPECIES=="TK",Twt,0))
+    DAT$Catch.Tiger.w=with(DAT,ifelse(SPECIES=="TG",Twt,0))
+    DAT$Catch.Scalloped.w=with(DAT,ifelse(SPECIES=="HS",Twt,0))
+    DAT$Catch.Blacktip.w=with(DAT,ifelse(SPECIES=="BT",Twt,0))
+    DAT$Catch.SpotTail.w=with(DAT,ifelse(SPECIES=="SO",Twt,0))
+    DAT$Catch.Milk.w=with(DAT,ifelse(SPECIES=="MI",Twt,0))
+    
     #reshape catch data
     TABLE=aggregate(cbind(Catch.Target,Catch.Dusky,Catch.Sandbar,Catch.Tiger,Catch.Scalloped,
                           Catch.Blacktip,Catch.SpotTail,Catch.Milk)~SHEET_NO,data=DAT,sum,na.rm=T)
+    TABLE.w=aggregate(cbind(Catch.Target.w,Catch.Dusky.w,Catch.Sandbar.w,Catch.Tiger.w,Catch.Scalloped.w,
+                          Catch.Blacktip.w,Catch.SpotTail.w,Catch.Milk.w)~SHEET_NO,data=DAT,sum,na.rm=T)
+    colnames(TABLE.w)=str_remove( colnames(TABLE.w),'.w')
     
     DAT1=DAT[!duplicated(DAT$SHEET_NO),match(THESEVARS,names(DAT))]
+    DAT1=DAT1%>%
+      mutate(finyear=case_when(Month%in%c(7:12)~paste(year,substr(year+1,3,4),sep='-'),
+                               Month%in%c(1:6)~paste(year-1,substr(year,3,4),sep='-')))       
+      
     TABLE=merge(TABLE,DAT1,by="SHEET_NO",all.x=TRUE)
+    TABLE.w=merge(TABLE.w,DAT1,by="SHEET_NO",all.x=TRUE)
     
     #remove shots with no catch due to baitless hooks
     baitless=DAT[grep('baitless',tolower(DAT$COMMENTS.hdr)),]%>%
       filter(grepl('all hooks',tolower(COMMENTS.hdr)))
-    if(nrow(baitless)>0)TABLE=TABLE%>%filter(!SHEET_NO%in%baitless$SHEET_NO)  
+    if(nrow(baitless)>0)
+    {
+      TABLE=TABLE%>%filter(!SHEET_NO%in%baitless$SHEET_NO) 
+      TABLE.w=TABLE.w%>%filter(!SHEET_NO%in%baitless$SHEET_NO) 
+    }
+       
     
     #proportion of records with target catch
     prop.with.catch=round(100*sum(TABLE$Catch.Target>0)/length(TABLE$Catch.Target),0)
-    return(list(dat=TABLE,prop.ktch=prop.with.catch))
+    
+    
+    return(list(dat=TABLE,dat.w=TABLE.w,prop.ktch=prop.with.catch))
   }
   for ( i in 1:N.species)
   {
-    dum=Effort.data.fun(TARGETS[i],SUBSET="NO")
+    dum=Effort.data.fun(target=TARGETS[i],SUBSET="NO")
     DATA.list[[i]]=dum$dat
+    DATA.list.w[[i]]=dum$dat.w
     Prop.Ktch.list[[i]]=dum$prop.ktch
   }
   
@@ -1333,86 +1417,112 @@ if(Do.abundance=="YES")
   
   
   
-  #1.10   ---- Nominal cpue ----#
+  #1.10   ---- Nominal cpue ----#  
+  hndLs=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance/")
   
-  #create data sets for cpue standardisation
+  #create data sets for cpue standardisation 
+    #note: SUBSET="YES" chooses stations done same time of year, etc
   for ( i in 1:N.species)
   {
-    dum=Effort.data.fun(TARGETS[i],SUBSET="YES")
+    dum=Effort.data.fun(TARGETS[i],SUBSET="YES")   
     DATA.list[[i]]=dum$dat
+    DATA.list.w[[i]]=dum$dat.w
     Prop.Ktch.list[[i]]=dum$prop.ktch
   }
   
   YEAR=sort(unique(DATA.list[[i]]$year))
   N.yrs=length(YEAR) 
   
-  #1.10.1. function for calculating cpue (all records)
-  All=function(DAT)
+    #1.10.1. Calculate annual mean CPUE (aggregated by finyear)  
+  Nom.dummy.FS=Nom.dummy.FS.w=Nom.dummy.w=Nom.dummy
+  fn.ainslie.cpues=function(dat,Ktch.targt,spname,ktch.var,LegN=FALSE)
   {
-    DAT$CPUE=DAT$Catch.Target/(DAT$N.hooks.Fixed*DAT$SOAK.TIME)
-    return(DAT[,match(c("year","CPUE"),names(DAT))])
+    names(dat) =  casefold(names(dat))
+    dat$catch = dat[,match(Ktch.targt,names(dat))]
+    dat$year = dat$year.c
+    dat$fymonth = factor(dat$month, levels=c(7:12, 1:6))
+    dat$season = as.numeric(substring(dat$finyear, 1, 4))
+    dat$smonth = factor(dat$month, levels=c(7:12, 1:6))
+    dat$effort =dat$n.hooks.fixed*dat$soak.time
+    d=CalcMeanCPUE(cpuedata = dat, catch.column="catch", effort.column="effort",
+                   plot.title = spname, cpue.units = paste0(ktch.var,'/hook hours'), 
+                   draw.plot=TRUE, show.legend=LegN,PaR="NO",showLNMean="YES")
+    return(d)
   }
-  
-  All.Nom.dummy.FS=All.Nom.dummy=Nom.dummy
-  for ( i in 1:N.species)
+  for(i in 1:N.species)
   {
-    All.Nom.dummy[[i]]=All(DATA.list[[i]])
-    All.Nom.dummy.FS[[i]]=All(subset(DATA.list[[i]],FixedStation=="YES"))
-  }
-  
-  #1.10.2. Calculate annual mean CPUE (aggregated by year)
-  Nom.dummy.FS=Nom.dummy
-  
-  Nominal=function(DAT)CPUE=aggregate(Catch.Target/(N.hooks.Fixed*SOAK.TIME)~year,DAT,mean)
-  
-  for ( i in 1:N.species)
-  {
-    Nom.dummy[[i]]=Nominal(DATA.list[[i]])
-    Nom.dummy.FS[[i]]=Nominal(subset(DATA.list[[i]],FixedStation=="YES"))
-  }
-  
-  #show all data and mean
-  if(explore.cpue=="YES")
-  {
-    plot.nom.cpue=function(A,B,LEGE,ALL)
-    {
-      if(ALL=="YES")YLIM=c(0,max(A$CPUE))
-      if(ALL=="NO")YLIM=c(0,max(B[,2]))
-      plot(A$year,A$CPUE,ylab="",xlab="",ylim=YLIM)
-      lines(B$year,B[,2],lwd=2,col=2)
-      legend("topright",LEGE,bty='n',cex=1.15)
-    }
-    par(mfcol=c(4,3),mai=c(.3,.4,.01,.1),oma=c(3,2,2,.1),las=1,mgp=c(.04,.6,0))
-    for ( i in 1:N.species) plot.nom.cpue(All.Nom.dummy[[i]],Nom.dummy[[i]],Tar.names[i],"NO")
-    mtext("Year",side=1,line=1,font=1,las=0,cex=1.85,outer=T)
-    mtext("CPUE",side=2,line=0,font=1,las=0,cex=1.85,outer=T)
-  }
-  
-  
-  #Mean All stations Vs Fixed stations
-  hndLs=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance/")
-  
-  if(explore.cpue=="YES")
-  {
-    fn.fig(paste(hndLs,"Nominal.cpue.All_vs_fixed.stations",sep=""),2000,2400)
-    par(mfcol=c(5,3),mai=c(.3,.4,.1,.1),oma=c(3,2,2,.1),las=1,mgp=c(.04,.6,0))
-    for ( i in 1:N.species)
-    {
-      YMAX=max(Nom.dummy[[i]][,2],Nom.dummy.FS[[i]][,2],na.rm=T)
-      plot(YEAR,Nom.dummy[[i]][,2],type='l',ylab="",xlab="",main="",ylim=c(0,YMAX),xaxt='n')
-      lines(YEAR,Nom.dummy.FS[[i]][,2],col=2)
-      axis(1,YEAR,YEAR)
-      mtext(Tar.names[i],side=3,line=.25,font=1,las=0,cex=.9)
-    }
-    plot(1:10,1:10,bty='n',pch='',xaxt='n',yaxt='n',ann=F)
-    legend("center",c("All stations","Fixed stations only"),lty=1,col=1:2,bty='n',cex=1.5)
-    mtext("Year",side=1,line=1,font=1,las=0,cex=1.85,outer=T)
-    mtext("CPUE",side=2,line=0,font=1,las=0,cex=1.85,outer=T)
+    NM=names(DATA.list)[i]
+    print(paste('-----Calculating Nominal cpue for ---',NM,"------"))
+    fn.fig(paste(hndLs,"Nominal cpue/",NM,sep=""),2400,2400)
+    par(mfcol=c(2,2),mai=c(.3,.6,.3,.1),oma=c(1,.1,1,1),las=1,mgp=c(2.25,.6,0))
+    
+    Nom.dummy[[i]]=fn.ainslie.cpues(dat=DATA.list[[i]]%>%rename(year.c=year),
+                                    Ktch.targt='catch.target',
+                                    spname='Numbers all stations',
+                                    ktch.var='1 shark',
+                                    LegN=TRUE)
+    Nom.dummy.FS[[i]]=fn.ainslie.cpues(dat=DATA.list[[i]]%>%
+                                       filter(FixedStation=="YES")%>%
+                                       rename(year.c=year),
+                                 Ktch.targt='catch.target',
+                                 spname='Numbers fixed stations',
+                                 ktch.var='1 shark')
+    
+    Nom.dummy.w[[i]]=fn.ainslie.cpues(dat=DATA.list.w[[i]]%>%rename(year.c=year),
+                                    Ktch.targt='catch.target',
+                                    spname='Weights all stations',
+                                    ktch.var='kg')
+    Nom.dummy.FS.w[[i]]=fn.ainslie.cpues(dat=DATA.list.w[[i]]%>%
+                                             filter(FixedStation=="YES")%>%
+                                             rename(year.c=year),
+                                       Ktch.targt='catch.target',
+                                       spname='Weight fixed stations',
+                                       ktch.var='kg')
     dev.off()
+
+  }
+    
+  #Calculate rate of increase for sandbar shark
+  if(explore.cpue=="YES")
+  {
+    fn.rate.inc=function(d,max.yr,Metric)
+    {
+      MIN.cpue=min(d$mean)
+      first.yr=d%>%filter(mean==MIN.cpue)%>%pull(season)
+      first.val=d%>%filter(season==first.yr)%>%pull(mean)
+      last.val=d%>%filter(season==max.yr)%>%pull(mean)
+      Percent.increase=100*((last.val-first.val)/first.val)
+      Percent.increase.yr=round(Percent.increase/length(first.yr:max.yr),2)
+      
+      d=d%>%
+        mutate(Rel.cpue=mean/MIN.cpue,
+               rel.lowCL=lowCL/MIN.cpue,
+               rel.uppCL=uppCL/MIN.cpue)
+      p=d%>%
+        ggplot(aes(season,Rel.cpue))+
+        geom_point()+
+        theme_PA()+
+        geom_errorbar(aes(ymin = rel.lowCL, ymax = rel.uppCL), width = 0.2)+
+        stat_poly_line(data=d%>%filter(season>=first.yr & season<max.yr)) +
+        stat_poly_eq(data=d%>%filter(season>=first.yr & season<max.yr),
+                     use_label(c("eq", "R2")))+ylim(0,NA)+
+        ggtitle(paste(Metric,'. Annual increase: ',Percent.increase.yr,'%',sep=''))
+      return(p)
+    }
+    p1=fn.rate.inc(d=Nom.dummy.FS$`Sandbar shark`%>%
+                  filter(method=='DLnMean'),
+                max.yr=2021,
+                Metric='Numbers, fixed stations')
+    p2=fn.rate.inc(d=Nom.dummy.FS.w$`Sandbar shark`%>%
+                  filter(method=='DLnMean'),
+                max.yr=2021,
+                Metric='Weight, fixed stations')
+    ggarrange(p1,p2,ncol=1,nrow=2)
+    ggsave(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance/Nominal cpue/Sandbar shark_percent increase.tiff"),
+           width = 8,height = 8,compression = "lzw")
   }
 
-  
-  #Effort series
+    #1.10.2 Extract Effort series
   Get.effort=function(DAT)EFF=aggregate(N.hooks.Fixed*SOAK.TIME~year,DAT,sum)
   Eff.All.stations=Get.effort(DATA.list[[2]])
   Eff.Fixed.stations=Get.effort(subset(DATA.list[[2]],FixedStation=="YES"))
@@ -3244,6 +3354,12 @@ if(Do.abundance=="YES")
     
     ERROR.st=BEST.model
     for(i in 1:N.species)ERROR.st[[i]]="NB"
+    
+    #Weight   #ACA, define best model per species
+    BEST.model.w=BEST.model
+    BEST.model.w$`Sandbar shark`=formula(cpue ~ year+ Month+ s(Mid.Lat, k = 3)+ s(BOTDEPTH,k = 3) +
+                                        s(Temp.res, k = 3) + Moon)
+
   }
   
   if(do.GLM=="YES")
@@ -3279,6 +3395,8 @@ if(Do.abundance=="YES")
       if(ErroR=="NB")  Fit=gam(FORMULA, data=d,method = "REML",family = nb)
       if(ErroR=="ZIP") Fit=zipgam(lambda.formula=FORMULA,pi.formula=FORMULA,data=d)
       if(ErroR=="ZINB") Fit=zinbgam(mu.formula=FORMULA,pi.formula=FORMULA, data=d)
+      if(ErroR=="Tweedie") Fit=bam(FORMULA,data=d,family='tw',method="fREML",discrete=TRUE)
+      
       
       #Predictions
       year.pred=summary(emmeans(Fit,"year", type="response"))
@@ -3338,18 +3456,60 @@ if(Do.abundance=="YES")
 
   Store=vector('list',N.species)   
   names(Store)=names(DATA.list)
+  Store.w=Store
   system.time(for(i in Species.cpue)     
   {
-    DAT=subset(DATA.list[[i]],FixedStation=="YES" & BOTDEPTH<210)
+    #1. Numbers
+    DAT=DATA.list[[i]]%>%
+          filter(FixedStation=="YES" & BOTDEPTH<210)
     TT=with(subset(DAT,Catch.Target>0),table(year))
-    d=DAT %>% filter(year%in%names(TT[TT>0])) %>%
+    d=DAT%>%
+        filter(year%in%names(TT[TT>0])) %>%
+        mutate(Mid.Lat=abs(Mid.Lat),
+               effort=SOAK.TIME*N.hooks.Fixed,
+               cpue=Catch.Target/effort,
+               log.Ef=log(effort),
+               year=factor(year,levels=unique(sort(year))),
+               finyear=factor(finyear,levels=unique(sort(finyear))),
+               Month=factor(Month,levels=unique(sort(Month))),
+               Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
+      #explore terms
+    if(explore.cpue=="YES")
+    {
+      p1=d%>%ggplot(aes(year,Catch.Target))+geom_boxplot()+theme_PA()+
+        geom_smooth(aes(group = 1))+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+      p2=d%>%ggplot(aes(finyear,Catch.Target))+geom_boxplot()+theme_PA()+
+        geom_smooth(aes(group = 1))+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+      p3=d%>%ggplot(aes(Month,Catch.Target))+geom_boxplot()+theme_PA()
+      p4=d%>%ggplot(aes(Moon,Catch.Target))+geom_boxplot()+theme_PA()
+      p5=d%>%mutate(BOTDEPTH=factor(10*floor(BOTDEPTH/10)))%>%ggplot(aes(BOTDEPTH,Catch.Target))+
+        geom_boxplot()+theme_PA()+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+      p6=d%>%mutate(Mid.Lat=factor(0.5*floor(Mid.Lat/0.5)))%>%ggplot(aes(Mid.Lat,Catch.Target))+
+        geom_boxplot()+theme_PA()+geom_smooth(aes(group = 1))+
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+      ggarrange(p1,p2,p3,p4,p5,p6,nrow=3,ncol=2)
+      ggsave(paste0(hndl.expl,"/Explore GAM inputs/",names(Store)[i],".tiff"),
+             width = 8,height = 8,compression = "lzw")
+    }
+      #run model
+    Store[[i]]=fit.best(d=d,FORMULA=BEST.model[[i]],ErroR=ERROR.st[[i]])
+    
+    #2. Weight
+    DAT=DATA.list.w[[i]]%>%
+      filter(FixedStation=="YES" & BOTDEPTH<210)
+    d=DAT%>%
+      filter(year%in%names(TT[TT>0])) %>%
       mutate(Mid.Lat=abs(Mid.Lat),
-             log.Ef=log(SOAK.TIME*N.hooks.Fixed),
+             effort=SOAK.TIME*N.hooks.Fixed,
+             cpue=Catch.Target/effort,
+             log.Ef=log(effort),
              year=factor(year,levels=unique(sort(year))),
+             finyear=factor(finyear,levels=unique(sort(finyear))),
              Month=factor(Month,levels=unique(sort(Month))),
              Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
+    Store.w[[i]]=fit.best(d=d,FORMULA=BEST.model.w[[i]],ErroR='Tweedie')  #ACA
     
-    Store[[i]]=fit.best(d=d,FORMULA=BEST.model[[i]],ErroR=ERROR.st[[i]])
+    
     rm(DAT,TT,d)
   }) 
   Store.out.dis.size=Store
@@ -5662,7 +5822,7 @@ if(Do.abundance=="YES")
   mtext("Year",1,outer=T,line=.25,cex=1.5)
   dev.off()
   
-  #10. Export size raw data  for population dynamics modelling (SS3)  #ACA
+  #10. Export size raw data  for population dynamics modelling (SS3)  
   for(i in 1:length(TARGETS))
   {
     dis.sheet.n=Store.out.dis.size[[i]]$DAT
