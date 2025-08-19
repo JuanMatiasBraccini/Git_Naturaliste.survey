@@ -79,7 +79,7 @@ library(ggpubr)
 #install.packages("countreg", repos = "http://R-Forge.R-project.org")
 #see great vignette: https://cran.r-project.org/web/packages/pscl/vignettes/countreg.pdf
 library("countreg")
-
+library(pryr)
 
 
 source(handl_OneDrive("R/HighstatLibV6.R"))  #for corvif ()
@@ -163,6 +163,7 @@ do.boot="NO"  #get confidence bounds thru bootstrapping
 n.boot=2e3   #Number of bootstrap iterations (for some species boot dat is rejected so bumped up iterations)
 Do.tiff="NO"    #select figure extension
 Do.jpeg="YES"
+Min.n.hooks.survey=20
 
 #control if doing sex ratio anlysis
 do.sex.ratio="NO"
@@ -184,8 +185,8 @@ MIN.RECORDS=100   #minimum total number of observations
 MaxDepth=450
 
 #maximum distance and depth from station to classify as "fixed station"
-Max.Dis=10   #(in km) 
-Max.depth=3  #(in metres)
+Max.Dis=20   #(in km) old 10
+Max.depth=10  #(in metres) old 3
 
 
 
@@ -574,9 +575,12 @@ if(DO.DIS)
   
 }
 
-# PROCEDURE SECTION -------------------------------------------------------
+# Set working directory for outputs -------------------------------------------------------
+setwd(handl_OneDrive('Analyses/Surveys/Naturaliste_longline/outputs/Abundance'))
+hndl.expl=paste(getwd(),"Exploratory",sep="/")
+hndl.stations=paste(getwd(),"Stations_by_year",sep="/")
 
-#Check size distribution by gear
+# Check size distribution by gear -------------------------------------------------------
 fn.check.size.gr=function(SPEC)
 {
   a=subset(DATA,Mid.Lat<=(-26) & SPECIES==SPEC & !is.na(FL))
@@ -593,7 +597,7 @@ fn.check.size.gr=function(SPEC)
 fn.check.size.gr(SPEC='GM')
 fn.check.size.gr(SPEC='WH')
 
-
+# General manipulations -------------------------------------------------------
 #drop unnecessary variables
 drop=c("MESH_SIZE","MESH_DROP","NET_LENGTH")
 DATA=DATA[,-match(drop,names(DATA))]
@@ -767,20 +771,18 @@ Table.1.scalies[is.na(Table.1.scalies)]=""
 N.droplines=length(unique(DATA.DL$SHEET_NO))
 N.longlines=length(unique(DATA$SHEET_NO))
 
-#Plot shot location and station by year
-do.dis=FALSE
-if(do.dis)
-{
-  DATA%>%
-    distinct(SHEET_NO,.keep_all = T)%>%
-    ggplot(aes(Mid.Long,Mid.Lat))+geom_point(alpha=0.5,col=2,size=3)+
-    facet_wrap(~year,ncol=4)+
-    geom_point(data=Fixed.Stations[1:20,],aes(Fix.St.mid.lon,Fix.St.mid.lat))+
-    geom_text_repel(data=Fixed.Stations[1:20,],aes(Fix.St.mid.lon,Fix.St.mid.lat,label = Station.no.),
-                    nudge_x = .6,nudge_y = -1,size = 3,angle=0)
-  ggsave("shot location and station by year.tiff",width = 8,height = 10,compression = "lzw")
-}
 
+# Plot shot location and station by year -------------------------------------------------------
+DATA%>%
+    distinct(SHEET_NO,.keep_all = T)%>%
+    ggplot(aes(Mid.Long,Mid.Lat))+geom_point(col=2,size=3)+
+    facet_wrap(~year,ncol=4)+
+    geom_point(data=Fixed.Stations[1:20,],aes(Fix.St.mid.lon,Fix.St.mid.lat),alpha=0.8)+
+    geom_text_repel(data=Fixed.Stations[1:20,],aes(Fix.St.mid.lon,Fix.St.mid.lat,label = Station.no.),
+                    nudge_x = .6,nudge_y = -1,size = 3,angle=0,alpha=0.8)+theme_PA()
+ggsave("shot location and station by year.tiff",width = 8,height = 10,compression = "lzw")
+
+# More manipulations -------------------------------------------------------
 #Create useful vars
 YEAR=sort(unique(DATA$year))
 N.yrs=length(YEAR) 
@@ -818,12 +820,14 @@ DATA$N.hooks.Fixed=with(DATA,
                      ifelse(SHEET_NO=="J00789",42,
                      ifelse(SHEET_NO%in%Hand.line.Shot,1,
                      ifelse(SHEET_NO%in%Beach.net,0,N.hooks))))))))
+DATA=DATA%>%
+  filter(N.hooks.Fixed>=10) #some handline caught sharks entered as longline
 
 DATA=subset(DATA,!is.na(Mid.Lat))   
 
 D.map=DATA
 
-#Define fixed stations
+# Define fixed stations -------------------------------------------------------
 Check.Station=Fixed.Stations[,match(c("Station.no.","Fix.St.mid.lon","Fix.St.mid.lat","Min.depth","max.depth","Point.depth"),names(Fixed.Stations))]
 N.rowCheck.St=nrow(Check.Station)
 Depth.dispersal=rep(NA,N.rowCheck.St)
@@ -831,7 +835,6 @@ for(i in 1:N.rowCheck.St)Depth.dispersal[i]=(Check.Station$max.depth[i]-Check.St
 Depth.dispersal=round(mean(Depth.dispersal,na.rm=T))/2
 Check.Station$Min.depth=with(Check.Station,ifelse(is.na(Min.depth),Point.depth-Depth.dispersal,Min.depth))
 Check.Station$max.depth=with(Check.Station,ifelse(is.na(max.depth),Point.depth+Depth.dispersal,max.depth))
-
 
 Shots.loc=DATA[,match(c("SHEET_NO","Mid.Lat","Mid.Long","BOTDEPTH"),names(DATA))]
 Shots.loc=Shots.loc[!duplicated(Shots.loc$SHEET_NO),]
@@ -871,41 +874,51 @@ Fixed.only=subset(UniC,FixedStation=="YES")
 Fixed.only=unique(Fixed.only$date)
 DATA$FixedStation=with(DATA,ifelse(date%in%Fixed.only,"YES",FixedStation))
 
-#Set "additional station" to 'not fixed' station as only a few years revisited   
+#Set "additional station" to 'not fixed' station as they were only revisited a few years or none at all    
 DATA$FixedStation=with(DATA,ifelse(!Station.no.%in%as.character(1:20),"NO",FixedStation))
 
 
-setwd(handl_OneDrive('Analyses/Surveys/Naturaliste_longline/outputs/Abundance'))
-
 #see what records were set to fixed stations
-hndl.expl=paste(getwd(),"Exploratory",sep="/")
-pdf(paste(hndl.expl,"Kept_Stations.pdf",sep="/"))
-with(subset(DATA,FixedStation=="YES"),plot(Mid.Long,Mid.Lat))
-points(Fixed.Stations$Fix.St.mid.lon,Fixed.Stations$Fix.St.mid.lat,pch=19,cex=.5,col=2)
-with(subset(DATA,FixedStation=="NO"),points(Mid.Long,Mid.Lat,pch=19,cex=.5,col=3))
-legend("topleft",c("used","station","dropped"),pch=c(1,19,19),col=c(1,2,3),bty='n')
-dev.off()
+DATA%>%
+  group_by(SHEET_NO,FixedStation,year,Mid.Lat,Mid.Long)%>%
+  tally()%>%
+  rename(n.fish=n)%>%
+  ggplot(aes(Mid.Long,Mid.Lat,color=FixedStation,size=n.fish))+
+  geom_point()+
+  facet_wrap(~year)+
+  theme_PA()+
+  theme(legend.position = 'top')+
+  geom_point(data=Fixed.Stations[1:20,]%>%mutate(FixedStation='YES',n.fish=1),
+             aes(Fix.St.mid.lon,Fix.St.mid.lat),alpha=0.8,color='black')+
+  geom_text_repel(data=Fixed.Stations[1:20,]%>%mutate(FixedStation='YES',n.fish=1),
+                  aes(Fix.St.mid.lon,Fix.St.mid.lat,label = Station.no.),
+                  nudge_x = .6,nudge_y = -1,size = 3,angle=0,alpha=0.8,color='black')
+ggsave(paste(hndl.stations,"Stations by year.tiff",sep="/"),width = 8,height = 10,compression = "lzw")
 
 Table.dropped=table(DATA$year,DATA$FixedStation)
-PROPR.dropped=Table.dropped[,1]/rowSums(Table.dropped)
-write.csv(PROPR.dropped,"prop.not.fixed.station.csv")
+Percent.dropped=round(100*Table.dropped[,1]/rowSums(Table.dropped),1)
+write.csv(cbind(Table.dropped,Percent.dropped),paste(hndl.stations,"Percentage of records by station type.csv",sep="/"))
 
-#Check stations visited each year (should be ~ 5 shots per station per year)
-TAB=with(DATA[!duplicated(paste(DATA$SHEET_NO,DATA$Station.no.)),],table(year,Station.no.))
-pdf(paste(hndl.expl,"Stations_by_year.pdf",sep="/"))
+#Check stations visited each year (should be ~ 5 shots per station per year)  
+TAB=DATA%>%
+        distinct(SHEET_NO,Station.no.,year)%>%
+        mutate(Station.no.=ifelse(is.na(Station.no.)|grepl('additional',Station.no.),
+                                  'additionals',Station.no.),
+               Station.no.=factor(Station.no.,levels=c(1:20,'additionals')))%>%
+        group_by(Station.no.,year)%>%
+        tally()%>%
+        spread(Station.no.,n,fill='')
+pdf(paste(hndl.stations,"shots per station per year.pdf",sep="/"),width=9)
 tmp <- TAB
 mytheme <- gridExtra::ttheme_default(
   core = list(padding=unit(c(1, 1), "mm"),fg_params=list(cex = .5)),
   colhead = list(fg_params=list(cex = .7)),
   rowhead = list(fg_params=list(cex = .7)))
-myt <- gridExtra::tableGrob(tmp[,1:19], theme = mytheme)
-grid.draw(myt)
-plot.new()
-myt <- gridExtra::tableGrob(tmp[,20:ncol(tmp)], theme = mytheme)
+myt <- gridExtra::tableGrob(tmp, theme = mytheme)
 grid.draw(myt)
 dev.off()
 
-#Select species for analysis
+# Select species for analysis -------------------------------------------------------
 Species.by.yr=with(subset(DATA,FixedStation=="YES" & TYPE=="Elasmo"),table(as.character(SPECIES),year))
 Species.by.yr.Min.per.year=Species.by.yr
 Species.by.yr.Min.per.year[Species.by.yr.Min.per.year<MIN.per.yr]=0
@@ -914,7 +927,6 @@ Tot.records.yr=rowSums(Species.by.yr.Min.per.year)
 Tot.records.yr=rev(sort(Tot.records.yr))
 TARGETS=names(Tot.records.yr[Tot.records.yr>=MIN.yrs])
 TARGETS.name=subset(Table.1,Species%in%TARGETS,select=c(Species,COMMON_NAME))
-
 
 Tot.records=rowSums(Species.by.yr)
 Tot.records=rev(sort(Tot.records))
@@ -932,7 +944,6 @@ TARGETS.name=TARGETS.name$COMMON_NAME
 names(TARGETS)=TARGETS.name
 N.species=length(TARGETS)
 
-
 #Number of species per stations
 dummy=subset(DATA,FixedStation=="YES",select=c(year,SPECIES,Mid.Long,Mid.Lat))
 dummy$dummy=with(dummy,paste(substr(Mid.Lat,1,5),substr(Mid.Long,1,5)))  
@@ -946,9 +957,7 @@ write.csv(table(UniC$year,UniC$FixedStation),"Table.fixed Vs NotFixed.csv")
           
 if(export.dat.hard.drive=="YES")write.csv(DATA,"E:/Matias_WA_Fisheries/Matias/Analyses/Surveys/DATA.csv",row.names=F)
 
-
 DATA$Moon=as.character(DATA$Moon)
-
 
 #Export nice table
 Export.tbl=function(WD,Tbl,Doc.nm,caption,paragph,HdR.col,HdR.bg,Hdr.fnt.sze,Hdr.bld,
@@ -996,8 +1005,7 @@ Export.tbl=function(WD,Tbl,Doc.nm,caption,paragph,HdR.col,HdR.bg,Hdr.fnt.sze,Hdr
   writeDoc( mydoc, file = paste(Doc.nm,".docx",sep=''))
 }
 
-
-#interpolate missing Temperature (linear interpolation)
+# Interpolate missing Temperature (linear interpolation) -------------------------------------------------------
 Unk.Temp=subset(DATA,!is.na(TEMP),select=c(SHEET_NO,TEMP))
 Unk.Temp=Unk.Temp[!duplicated(Unk.Temp$SHEET_NO),]
 add.Sheet.no=unique(DATA$SHEET_NO)
@@ -1017,7 +1025,7 @@ DATA$depth.bin=10*round(DATA$BOTDEPTH/10)
 DATA$TEMP1.bin=floor(DATA$TEMP1)
 DATA$Mid.Lat.bin=floor(abs(DATA$Mid.Lat))
 
-#Add life history pars 
+# Add life history pars -------------------------------------------------------
 DATA=DATA%>%
   left_join(LH.data%>%
               dplyr::select(SPECIES,a_w8t,b_w8t,male_a_w8t,male_b_w8t,w8t_length.units,
@@ -1058,8 +1066,6 @@ DATA%>%
   theme_PA()+theme(legend.position = 'top',legend.title = element_blank())
 ggsave(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance/Reconstructed_TL_targets.tiff"),
        width = 8,height = 8,compression = "lzw")
-
-
 
 DATA=DATA%>%
   dplyr::select(-c(TL.dumy,SEX.dummy,Twt.average,
@@ -1215,13 +1221,13 @@ if(Do.abundance=="YES")
               "TEMP1.bin","Temp.res","Mid.Lat.bin",
               "N.hooks.Fixed","SOAK.TIME","Method","FixedStation","Station.no.")
   
-  #1.6    Construct wide database for analysis  
+  #1.6    Construct wide database for analysis   
   Effort.data.fun=function(target,SUBSET)
   {
     #remove record if no effort data or outside distribution
-    if(SUBSET=="NO")DAT=subset(DATA,N.hooks.Fixed>20)
-    if(SUBSET=="YES")DAT=subset(DATA,N.hooks.Fixed>20 & BOTDEPTH <MaxDepth &
-                                  Month%in%These.Months & Set.time <"08:00" & !(year==2004))
+    if(SUBSET=="NO")DAT=subset(DATA,N.hooks.Fixed>Min.n.hooks.survey)
+    if(SUBSET=="YES")DAT=subset(DATA,N.hooks.Fixed>Min.n.hooks.survey & BOTDEPTH <MaxDepth &
+                                  Month%in%These.Months & Set.time <"08:00" & !(year==2004)) #2004 longline set mostly in the arvo 
     DAT=subset(DAT,!is.na(SPECIES))
     
     DAT=subset(DAT,year>2001)  #only 1 shot done during May:August in 2001
@@ -1485,38 +1491,38 @@ if(Do.abundance=="YES")
   #Calculate rate of increase for sandbar shark
   if(explore.cpue=="YES")
   {
-    fn.rate.inc=function(d,max.yr,Metric)
+    fn.rate.inc=function(d,max.yr,Metric,first.yr)
     {
-      MIN.cpue=min(d$mean)
-      first.yr=d%>%filter(mean==MIN.cpue)%>%pull(season)
       first.val=d%>%filter(season==first.yr)%>%pull(mean)
       last.val=d%>%filter(season==max.yr)%>%pull(mean)
       Percent.increase=100*((last.val-first.val)/first.val)
       Percent.increase.yr=round(Percent.increase/length(first.yr:max.yr),2)
       
       d=d%>%
-        mutate(Rel.cpue=mean/MIN.cpue,
-               rel.lowCL=lowCL/MIN.cpue,
-               rel.uppCL=uppCL/MIN.cpue)
+        mutate(Rel.cpue=mean/first.val,
+               rel.lowCL=lowCL/first.val,
+               rel.uppCL=uppCL/first.val)
       p=d%>%
         ggplot(aes(season,Rel.cpue))+
         geom_point()+
         theme_PA()+
         geom_errorbar(aes(ymin = rel.lowCL, ymax = rel.uppCL), width = 0.2)+
-        stat_poly_line(data=d%>%filter(season>=first.yr & season<max.yr)) +
-        stat_poly_eq(data=d%>%filter(season>=first.yr & season<max.yr),
-                     use_label(c("eq", "R2")))+ylim(0,NA)+
-        ggtitle(paste(Metric,'. Annual increase: ',Percent.increase.yr,'%',sep=''))
+        stat_poly_line(data=d%>%filter(season>=first.yr & season<=max.yr)) +
+        stat_poly_eq(data=d%>%filter(season>=first.yr & season<=max.yr),
+                     use_label(c("eq", "R2")))+ylim(0,NA)
+        #ggtitle(paste(Metric,'. Annual increase: ',Percent.increase.yr,'%',sep=''))
       return(p)
     }
     p1=fn.rate.inc(d=Nom.dummy.FS$`Sandbar shark`%>%
-                  filter(method=='DLnMean'),
+                      filter(method=='DLnMean'),
                 max.yr=2021,
-                Metric='Numbers, fixed stations')
+                Metric='Numbers, fixed stations',
+                first.yr=2007)
     p2=fn.rate.inc(d=Nom.dummy.FS.w$`Sandbar shark`%>%
-                  filter(method=='DLnMean'),
+                      filter(method=='DLnMean'),
                 max.yr=2021,
-                Metric='Weight, fixed stations')
+                Metric='Weight, fixed stations',
+                first.yr=2007)
     ggarrange(p1,p2,ncol=1,nrow=2)
     ggsave(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance/Nominal cpue/Sandbar shark_percent increase.tiff"),
            width = 8,height = 8,compression = "lzw")
@@ -1852,7 +1858,7 @@ if(Do.abundance=="YES")
   Offset='offset(log.Ef)'
   
   #1.11.2. Select terms and error structure
-  
+    #Numbers
   if(do.GAM=="YES" & Select.term=="YES")
   {
     LOgLik=function(MoD)  #get model Loglikelihood
@@ -2190,7 +2196,6 @@ if(Do.abundance=="YES")
     dev.off()
     
   }
-  
   if(do.GLM=="YES" & Select.term=="YES")
   {
     # Set up different distribution function
@@ -3328,7 +3333,67 @@ if(Do.abundance=="YES")
       
     }
   }
-
+  
+    #Weights
+  if(do.GAM=="YES" & Select.term=="YES")
+  {
+    cl <- makeCluster(detectCores()-1)
+    registerDoParallel(cl)
+    getDoParWorkers()
+    system.time({Select.term_error=foreach(i=Species.cpue,.packages=c('dplyr','doParallel')) %dopar%
+      {
+        Terms=c("year","Month","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","s(Temp.res,k=3)","Moon")
+        d=DATA.list.w[[i]]%>%
+          filter(BOTDEPTH<210)%>%
+          mutate(effort=SOAK.TIME*N.hooks.Fixed,
+                 cpue=Catch.Target/effort)%>%
+          filter(!is.na(effort))
+        zero.catch.yr=d%>%group_by(year)%>%summarise(mean=mean(cpue))%>%filter(mean==0)%>%pull(year)
+        if(length(zero.catch.yr)>0) d=d%>%filter(!year%in%zero.catch.yr)
+        d=d%>%
+          mutate(Mid.Lat=abs(Mid.Lat),
+                 log.Ef=log(effort),
+                 year=factor(year,levels=unique(sort(year))),
+                 Month=factor(Month,levels=unique(sort(Month))),
+                 Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
+        tested.mods=foreach(t =1:length(Terms),.errorhandling='remove',.packages=c('mgcv','doParallel'))%do%
+          {
+            FRMLA=formula(paste('cpue',paste(c(Terms[1:t]),collapse="+"),sep="~"))
+            Gam=gam(FRMLA,data=d,method = "REML",family='tw')
+            return(list(Gam=Gam))
+          }
+        for(t in 1:length(Terms))names(tested.mods)[t]=paste(Terms[1:t],collapse="+")
+        return(tested.mods)
+      }})    #takes 8 minutes
+    names(Select.term_error)=names(DATA.list.w)
+    stopCluster(cl) 
+    
+    #  Select best model terms (i.e. model structure) based on AIC and deviance explained
+    SLCT.TRM=vector('list',length(Species.cpue))
+    names(SLCT.TRM)=names(DATA.list.w)
+    for(i in Species.cpue) SLCT.TRM[[i]]=Select.best.modl.str(d=Select.term_error[[i]])
+    AIC.terms=do.call(rbind,lapply(SLCT.TRM, `[[`, 1))
+    Resid.deviance.terms=do.call(rbind,lapply(SLCT.TRM, `[[`, 2))
+    write.csv(AIC.terms,paste(getwd(),"/Model selection/AIC.terms_weight.csv",sep=''))
+    Resid.deviance.terms=Resid.deviance.terms%>%rename(Model=Term)
+    Resid.deviance.terms$Model=AIC.terms$Model
+    write.csv(Resid.deviance.terms,paste(getwd(),"/Model selection/Deviance.explained.by.terms_weight.csv",sep=''))
+    Best.SLCT.TRM=SLCT.TRM  
+    for(i in Species.cpue)
+    {
+      d=Best.SLCT.TRM[[i]]$Deviance.exp
+      Best.terms=vector('list',ncol(d)-1)
+      names(Best.terms)=colnames(d)[-1]
+      for(p in 1:length(Best.terms))
+      {
+        d1=d[,c(1,p+1)]%>%mutate(Prev=lag(d[,p+1],1),
+                                 Exp.per=d[,p+1]-Prev,
+                                 Exp.per=ifelse(is.na(Exp.per),10,Exp.per))
+        Best.terms[[p]]=d1$Term[which(d1$Exp.per>1)]
+      }
+      Best.SLCT.TRM[[i]]=Best.terms
+    }
+  }
   
   #1.11.3  Fit Best model and error structure 
   if(do.GAM=="YES")
@@ -3346,6 +3411,7 @@ if(Do.abundance=="YES")
                                     "s(BOTDEPTH,k=3)","s(Temp.res,k=3)",Offset),collapse="+"),sep="~"))
     BEST.model$'Scalloped hammerhead'= formula(paste(Res.var,paste(c("year",
                                          "s(BOTDEPTH,k=3)",Offset),collapse="+"),sep="~"))
+    BEST.model$'Great hammerhead'=BEST.model$'Scalloped hammerhead'
     BEST.model$"Dusky shark"=formula(paste(Res.var,paste(c("year","s(Mid.Lat,k=3)","Moon",
                                      Offset),collapse="+"),sep="~"))
     BEST.model$'Sliteye shark'=formula(paste(Res.var,paste(c("year",
@@ -3355,11 +3421,16 @@ if(Do.abundance=="YES")
     ERROR.st=BEST.model
     for(i in 1:N.species)ERROR.st[[i]]="NB"
     
-    #Weight   #ACA, define best model per species
+    #Weight   
     BEST.model.w=BEST.model
-    BEST.model.w$`Sandbar shark`=formula(cpue ~ year+ Month+ s(Mid.Lat, k = 3)+ s(BOTDEPTH,k = 3) +
-                                        s(Temp.res, k = 3) + Moon)
-
+    BEST.model.w$`Sandbar shark`=formula(cpue ~ year+ Month+ s(Mid.Lat, k = 3)+ s(BOTDEPTH,k = 3))
+    BEST.model.w$'Milk shark'=BEST.model.w$`Sandbar shark`
+    BEST.model.w$"Dusky shark"=BEST.model.w$`Spot-tail shark`=formula(cpue ~ year+ s(Mid.Lat, k = 3))
+    BEST.model.w$'Tiger shark'=formula(cpue ~ year+ s(BOTDEPTH,k = 3))
+    BEST.model.w$`Blacktip sharks`=formula(cpue ~ year+ Month+ s(BOTDEPTH,k = 3)+Moon)  
+    BEST.model.w$`Scalloped hammerhead`=BEST.model.w$`Great hammerhead`=formula(cpue ~ year+ Month+ s(Mid.Lat, k = 3))
+    BEST.model.w$`Sliteye shark`=formula(cpue ~ year+Month+s(Mid.Lat,k=3)+s(BOTDEPTH,k=3)+Moon)
+    BEST.model.w$`Silvertip shark`=formula(cpue ~ year+Month+s(Temp.res,k=3)+Moon)
   }
   
   if(do.GLM=="YES")
@@ -3386,11 +3457,25 @@ if(Do.abundance=="YES")
     ERROR.st$"Spot-tail shark"=ERROR.st$"Scalloped hammerhead"=ERROR.st$"Sliteye shark"="ZIP"
   }
 
+  #replace calendar year for financial year
+  for(i in Species.cpue)
+  {
+    DATA.list[[i]]=DATA.list[[i]]%>%
+                      mutate(year.calendar=year,
+                             year=as.numeric(substr(finyear,1,4)))
+    DATA.list.w[[i]]=DATA.list.w[[i]]%>%
+                      mutate(year.calendar=year,
+                             year=as.numeric(substr(finyear,1,4)))
+                    
+    #BEST.model[[i]]=pryr::substitute_q(BEST.model[[i]], list(year = as.name('finyear')))
+    #BEST.model.w[[i]]=pryr::substitute_q(BEST.model.w[[i]], list(year = as.name('finyear')))
+  }
 
   fit.best=function(d,FORMULA,ErroR)
   {
     if(do.GAM=="YES")
     {
+      #Fit model
       if(ErroR=="Pois") Fit=gam(FORMULA,data=d,method = "REML",family=poisson)
       if(ErroR=="NB")  Fit=gam(FORMULA, data=d,method = "REML",family = nb)
       if(ErroR=="ZIP") Fit=zipgam(lambda.formula=FORMULA,pi.formula=FORMULA,data=d)
@@ -3399,23 +3484,49 @@ if(Do.abundance=="YES")
       
       
       #Predictions
-      year.pred=summary(emmeans(Fit,"year", type="response"))
-      
-      Lat.pred=NULL
-      used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
-      if(sum(used.term)>0)
+      if(any(grepl('offset',FORMULA)))
       {
-        Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
-        Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.5))))
-      }
-      
-      Depth.pred=NULL
-      used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
-      if(sum(used.term)>0)
+        year.pred=summary(emmeans(Fit,"year", type="response", offset = log(d$effort), data = d))
+        
+        Lat.pred=NULL
+        used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
+        if(sum(used.term)>0)
+        {
+          Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
+          Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.5)),
+                                   offset = log(d$effort), data = d))
+        }
+        
+        Depth.pred=NULL
+        used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
+        if(sum(used.term)>0)
+        {
+          ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
+          Depth.pred=summary(emmeans(Fit,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10)),
+                                     offset = log(d$effort), data = d))
+        }
+        
+      }else
       {
-        ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
-        Depth.pred=summary(emmeans(Fit,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10))))
+        year.pred=summary(emmeans(Fit,"year", type="response"))
+        
+        Lat.pred=NULL
+        used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
+        if(sum(used.term)>0)
+        {
+          Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
+          Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.5))))
+        }
+        
+        Depth.pred=NULL
+        used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
+        if(sum(used.term)>0)
+        {
+          ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
+          Depth.pred=summary(emmeans(Fit,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10))))
+        }
       }
+
     }
     
     if(do.GLM=="YES")
@@ -3448,7 +3559,14 @@ if(Do.abundance=="YES")
     }
     
     #Null model
-    Null=update(Fit,.~1)
+    if(any(grepl('offset',FORMULA)))
+    {
+      Null=update(Fit,.~1)
+    }else
+    {
+      Null=gam(cpue ~ 1,data=d,family='tw',method="fREML")
+    }
+      
     
     return(list(Fit=Fit,DAT=d,Null=Null,year.pred=year.pred,
                 Lat.pred=Lat.pred,Depth.pred=Depth.pred))
@@ -3456,35 +3574,61 @@ if(Do.abundance=="YES")
 
   Store=vector('list',N.species)   
   names(Store)=names(DATA.list)
-  Store.w=Store
+  Store.n=Store
+  do.numbers=FALSE
   system.time(for(i in Species.cpue)     
   {
+    print(paste('-------------Fitting models to ------',names(DATA.list.w)[i]))
     #1. Numbers
-    DAT=DATA.list[[i]]%>%
-          filter(FixedStation=="YES" & BOTDEPTH<210)
-    TT=with(subset(DAT,Catch.Target>0),table(year))
-    d=DAT%>%
+    if(do.numbers)
+    {
+      DAT=DATA.list[[i]]%>%
+        filter(FixedStation=="YES" & BOTDEPTH<210)
+      TT=with(subset(DAT,Catch.Target>0),table(year))
+      d=DAT%>%
         filter(year%in%names(TT[TT>0])) %>%
         mutate(Mid.Lat=abs(Mid.Lat),
                effort=SOAK.TIME*N.hooks.Fixed,
-               cpue=Catch.Target/effort,
-               log.Ef=log(effort),
+               cpue=Catch.Target/effort)%>%
+        filter(!is.na(effort))%>%
+        mutate(log.Ef=log(effort),
                year=factor(year,levels=unique(sort(year))),
                finyear=factor(finyear,levels=unique(sort(finyear))),
                Month=factor(Month,levels=unique(sort(Month))),
                Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
-      #explore terms
+      #run model
+      Store.n[[i]]=fit.best(d=d,FORMULA=BEST.model[[i]],ErroR=ERROR.st[[i]])
+      
+    }
+        
+    #2. Weight  
+    DAT=DATA.list.w[[i]]%>%
+      filter(FixedStation=="YES" & BOTDEPTH<210)
+    d=DAT%>%
+      mutate(Mid.Lat=abs(Mid.Lat),
+             effort=SOAK.TIME*N.hooks.Fixed,
+             cpue=Catch.Target/effort)%>%
+      filter(!is.na(effort))
+    zero.catch.yr=d%>%group_by(year)%>%summarise(mean=mean(cpue))%>%filter(mean==0)%>%pull(year)
+    if(length(zero.catch.yr)>0) d=d%>%filter(!year%in%zero.catch.yr)
+    d=d%>%
+      mutate(log.Ef=log(effort),
+             year=factor(year,levels=unique(sort(year))),
+             finyear=factor(finyear,levels=unique(sort(finyear))),
+             Month=factor(Month,levels=unique(sort(Month))),
+             Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
+    #explore terms
     if(explore.cpue=="YES")
     {
-      p1=d%>%ggplot(aes(year,Catch.Target))+geom_boxplot()+theme_PA()+
+      p1=d%>%ggplot(aes(year,cpue))+geom_boxplot()+theme_PA()+
         geom_smooth(aes(group = 1))+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
-      p2=d%>%ggplot(aes(finyear,Catch.Target))+geom_boxplot()+theme_PA()+
+      p2=d%>%ggplot(aes(finyear,cpue))+geom_boxplot()+theme_PA()+
         geom_smooth(aes(group = 1))+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
-      p3=d%>%ggplot(aes(Month,Catch.Target))+geom_boxplot()+theme_PA()
-      p4=d%>%ggplot(aes(Moon,Catch.Target))+geom_boxplot()+theme_PA()
-      p5=d%>%mutate(BOTDEPTH=factor(10*floor(BOTDEPTH/10)))%>%ggplot(aes(BOTDEPTH,Catch.Target))+
+      p3=d%>%ggplot(aes(Month,cpue))+geom_boxplot()+theme_PA()
+      p4=d%>%ggplot(aes(Moon,cpue))+geom_boxplot()+theme_PA()
+      p5=d%>%mutate(BOTDEPTH=factor(10*floor(BOTDEPTH/10)))%>%ggplot(aes(BOTDEPTH,cpue))+
         geom_boxplot()+theme_PA()+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
-      p6=d%>%mutate(Mid.Lat=factor(0.5*floor(Mid.Lat/0.5)))%>%ggplot(aes(Mid.Lat,Catch.Target))+
+      p6=d%>%mutate(Mid.Lat=factor(0.5*floor(Mid.Lat/0.5)))%>%ggplot(aes(Mid.Lat,cpue))+
         geom_boxplot()+theme_PA()+geom_smooth(aes(group = 1))+
         theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
       ggarrange(p1,p2,p3,p4,p5,p6,nrow=3,ncol=2)
@@ -3492,27 +3636,13 @@ if(Do.abundance=="YES")
              width = 8,height = 8,compression = "lzw")
     }
       #run model
-    Store[[i]]=fit.best(d=d,FORMULA=BEST.model[[i]],ErroR=ERROR.st[[i]])
-    
-    #2. Weight
-    DAT=DATA.list.w[[i]]%>%
-      filter(FixedStation=="YES" & BOTDEPTH<210)
-    d=DAT%>%
-      filter(year%in%names(TT[TT>0])) %>%
-      mutate(Mid.Lat=abs(Mid.Lat),
-             effort=SOAK.TIME*N.hooks.Fixed,
-             cpue=Catch.Target/effort,
-             log.Ef=log(effort),
-             year=factor(year,levels=unique(sort(year))),
-             finyear=factor(finyear,levels=unique(sort(finyear))),
-             Month=factor(Month,levels=unique(sort(Month))),
-             Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
-    Store.w[[i]]=fit.best(d=d,FORMULA=BEST.model.w[[i]],ErroR='Tweedie')  #ACA
+    Store[[i]]=fit.best(d=d,FORMULA=BEST.model.w[[i]],ErroR='Tweedie')  #ACA
     
     
     rm(DAT,TT,d)
   }) 
   Store.out.dis.size=Store
+  
   #Is there a non-linear relation in residuals that requires GAM?    NOT applicable anymore as I am already using GAMs....
   #note: if Pearson residuals vs the covariate shows a clear pattern 
   #       (i.e. Significant Anova), then GAM is needed (i.e. covariates
@@ -4283,15 +4413,14 @@ if(Do.abundance=="YES")
 # 2. Multivariate analysis and Ecosystem indicators   MISSING:  USE Fixed Stations only! ----------------------------------------------------------------------
 #note: could use FL or TL to see ontogenetic effects (e.g. good size range for duskies, size range other species??)
 #    consider manyglm instead of adonis
-working='online'
-if(working=='offline')
-{
-  #write.csv(DATA,"C:/Users/myb/OneDrive - Department of Primary Industries and Regional Development/Desktop/multivariate data/DATA.csv",row.names = F)
-  DATA=read.csv('C:/Users/myb/OneDrive - Department of Primary Industries and Regional Development/Desktop/multivariate data/DATA.csv')
-}
-##
 if(Do.multivariate=="YES")
 {
+  working='online'
+  if(working=='offline')
+  {
+    #write.csv(DATA,"C:/Users/myb/OneDrive - Department of Primary Industries and Regional Development/Desktop/multivariate data/DATA.csv",row.names = F)
+    DATA=read.csv('C:/Users/myb/OneDrive - Department of Primary Industries and Regional Development/Desktop/multivariate data/DATA.csv')
+  }
   hndl.eco=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Ecosystems/")
   
   DATA.eco=subset(DATA,Month%in%These.Months & Taxa=="Elasmobranch" & BOTDEPTH<500 & FixedStation=="YES" )
@@ -4884,7 +5013,7 @@ if(Do.multivariate=="YES")
 }
 
 
-# REPORT_Outputs abundance paper----------------------------------------------------------------------
+# 3. REPORT_Outputs abundance paper----------------------------------------------------------------------
 if(Do.abundance=="YES")
 {
   setwd(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance"))
@@ -5855,8 +5984,7 @@ if(Do.abundance=="YES")
   }
 }
 
-
-# REPORT_Ecosystem indicators FROM FISHERY INDEPENDENT SURVEYS----------------------------------------------------------------------
+# 4. REPORT_Ecosystem indicators FROM FISHERY INDEPENDENT SURVEYS----------------------------------------------------------------------
 if(Do.ecosystems=="YES")
 {
   if(do.glm.ecos=="YES")    
@@ -6034,9 +6162,7 @@ if(Do.ecosystems=="YES")
     dev.off()
   }
 }
-
-
-# REPORT_MULTIVARIATE ANALYSIS OF CATCH COMPOSITION FROM FISHERY INDEPENDENT SURVEYS----------------------------------------------------------------------
+# 5. REPORT_MULTIVARIATE ANALYSIS OF CATCH COMPOSITION FROM FISHERY INDEPENDENT SURVEYS----------------------------------------------------------------------
 if(Do.multivariate=="YES")
 {
   Hndl=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Multivariate/")
