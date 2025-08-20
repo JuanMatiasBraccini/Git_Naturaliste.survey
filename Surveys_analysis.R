@@ -164,6 +164,7 @@ n.boot=2e3   #Number of bootstrap iterations (for some species boot dat is rejec
 Do.tiff="NO"    #select figure extension
 Do.jpeg="YES"
 Min.n.hooks.survey=20
+use.only.fixed.stations=FALSE #set to TRUE if only use Fixed Stations
 
 #control if doing sex ratio anlysis
 do.sex.ratio="NO"
@@ -1441,7 +1442,7 @@ if(Do.abundance=="YES")
   
     #1.10.1. Calculate annual mean CPUE (aggregated by finyear)  
   Nom.dummy.FS=Nom.dummy.FS.w=Nom.dummy.w=Nom.dummy
-  fn.ainslie.cpues=function(dat,Ktch.targt,spname,ktch.var,LegN=FALSE)
+  fn.ainslie.cpues=function(dat,Ktch.targt,spname,ktch.var,LegN=FALSE) 
   {
     names(dat) =  casefold(names(dat))
     dat$catch = dat[,match(Ktch.targt,names(dat))]
@@ -1452,7 +1453,7 @@ if(Do.abundance=="YES")
     dat$effort =dat$n.hooks.fixed*dat$soak.time
     d=CalcMeanCPUE(cpuedata = dat, catch.column="catch", effort.column="effort",
                    plot.title = spname, cpue.units = paste0(ktch.var,'/hook hours'), 
-                   draw.plot=TRUE, show.legend=LegN,PaR="NO",showLNMean="YES")
+                   draw.plot=TRUE, show.legend=LegN,PaR="NO",showLNMean="YES",out.CV=TRUE)
     return(d)
   }
   for(i in 1:N.species)
@@ -1933,7 +1934,7 @@ if(Do.abundance=="YES")
     stopCluster(cl) 
     
     #  Select best model terms (i.e. model structure) based on AIC and deviance explained
-    Select.best.modl.str=function(d)
+    Select.best.modl.str=function(d,Res.var1=Res.var,Offset1=Offset)
     {
       #set up table
       TeRms=names(d)
@@ -1971,7 +1972,7 @@ if(Do.abundance=="YES")
       
       #Get formulas
       teRmS=rep(NA,length(d))
-      for(t in 1:length(d)) teRmS[t]=paste(Res.var,paste(c(names(d)[t],Offset),collapse="+"),sep="~")
+      for(t in 1:length(d)) teRmS[t]=paste(Res.var1,paste(c(names(d)[t],Offset1),collapse="+"),sep="~")
       
       #Get AIC derives
       AIC.der=vector('list',length=length(2:ncol(AiC)))
@@ -3371,7 +3372,7 @@ if(Do.abundance=="YES")
     #  Select best model terms (i.e. model structure) based on AIC and deviance explained
     SLCT.TRM=vector('list',length(Species.cpue))
     names(SLCT.TRM)=names(DATA.list.w)
-    for(i in Species.cpue) SLCT.TRM[[i]]=Select.best.modl.str(d=Select.term_error[[i]])
+    for(i in Species.cpue) SLCT.TRM[[i]]=Select.best.modl.str(d=Select.term_error[[i]],Res.var1='cpue',Offset1=NULL)
     AIC.terms=do.call(rbind,lapply(SLCT.TRM, `[[`, 1))
     Resid.deviance.terms=do.call(rbind,lapply(SLCT.TRM, `[[`, 2))
     write.csv(AIC.terms,paste(getwd(),"/Model selection/AIC.terms_weight.csv",sep=''))
@@ -3398,6 +3399,7 @@ if(Do.abundance=="YES")
   #1.11.3  Fit Best model and error structure 
   if(do.GAM=="YES")
   {
+    #Numbers
     BEST.model=vector('list',N.species)
     names(BEST.model)=names(DATA.list)
     BEST.model$'Milk shark'=BEST.model$'Tiger shark'=
@@ -3421,7 +3423,7 @@ if(Do.abundance=="YES")
     ERROR.st=BEST.model
     for(i in 1:N.species)ERROR.st[[i]]="NB"
     
-    #Weight   
+    #Weights   
     BEST.model.w=BEST.model
     BEST.model.w$`Sandbar shark`=formula(cpue ~ year+ Month+ s(Mid.Lat, k = 3)+ s(BOTDEPTH,k = 3))
     BEST.model.w$'Milk shark'=BEST.model.w$`Sandbar shark`
@@ -3583,7 +3585,8 @@ if(Do.abundance=="YES")
     if(do.numbers)
     {
       DAT=DATA.list[[i]]%>%
-        filter(FixedStation=="YES" & BOTDEPTH<210)
+        filter(BOTDEPTH<210)
+      if(use.only.fixed.stations) DAT=DAT%>%filter(FixedStation=="YES")
       TT=with(subset(DAT,Catch.Target>0),table(year))
       d=DAT%>%
         filter(year%in%names(TT[TT>0])) %>%
@@ -3603,7 +3606,8 @@ if(Do.abundance=="YES")
         
     #2. Weight  
     DAT=DATA.list.w[[i]]%>%
-      filter(FixedStation=="YES" & BOTDEPTH<210)
+      filter(BOTDEPTH<210)
+    if(use.only.fixed.stations) DAT=DAT%>%filter(FixedStation=="YES")
     d=DAT%>%
       mutate(Mid.Lat=abs(Mid.Lat),
              effort=SOAK.TIME*N.hooks.Fixed,
@@ -3636,13 +3640,13 @@ if(Do.abundance=="YES")
              width = 8,height = 8,compression = "lzw")
     }
       #run model
-    Store[[i]]=fit.best(d=d,FORMULA=BEST.model.w[[i]],ErroR='Tweedie')  #ACA
+    Store[[i]]=fit.best(d=d,FORMULA=BEST.model.w[[i]],ErroR='Tweedie')  
     
     
     rm(DAT,TT,d)
   }) 
   Store.out.dis.size=Store
-  
+
   #Is there a non-linear relation in residuals that requires GAM?    NOT applicable anymore as I am already using GAMs....
   #note: if Pearson residuals vs the covariate shows a clear pattern 
   #       (i.e. Significant Anova), then GAM is needed (i.e. covariates
@@ -3708,12 +3712,15 @@ if(Do.abundance=="YES")
    Ch.sq=ERROR.st
    for(i in Species.cpue) Ch.sq[[i]]=pchisq(2 * (logLik(Store[[i]]$Fit) - logLik(Store[[i]]$Null)), df = 3, lower.tail = FALSE)
 
-    #rootgram
-  fn.fig(paste(getwd(),"/Model selection/rootgram_abundance",sep=""),2000,2400)
-  smart.par(n.plots=length(Species.cpue),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
-  for(i in Species.cpue) rootogram(Store[[i]]$Fit, main = TARGETS.name[i])
-  dev.off()
-  
+    #rootgram  
+   if(do.numbers)
+   {
+     fn.fig(paste(getwd(),"/Model selection/rootgram_abundance",sep=""),2000,2400)
+     smart.par(n.plots=length(Species.cpue),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
+     for(i in Species.cpue) rootogram(Store[[i]]$Fit, main = TARGETS.name[i])
+     dev.off()
+   }
+   
      #Anova tables    
   Anova.tab=function(mod,Fcol)  
   {
@@ -3743,41 +3750,44 @@ if(Do.abundance=="YES")
 
     return(Tab)
   }
- 
   
     #Get terms significance and coefficients 
-  Sig.terms=vector('list',N.species)
-  names(Sig.terms)=TARGETS.name
-  Sig.term.coeff=Sig.terms
-  for (i in 1:N.species)
+  if(do.numbers)
   {
-    a=as.data.frame.matrix(coeftest(Store[[i]]$Fit))
-    write.csv(a,paste("Paper/Anovas/Anova.abundance_",names(Store)[i],".csv",sep=""),row.names=T)
-    
-    id=match('Pr(>|z|)',names(a))
-    if(length(id)>0) names(a)[id]='Pr(>|t|)'
-    
-    Sigi=rownames(a[which(a$`Pr(>|t|)`<0.05),])
-    Sigi=Sigi[!grepl("\\bIntercept\\b",Sigi)]
-    Sigi=Sigi[!grepl('year',Sigi)]
-    Sigi.count=sapply(Sigi[grepl('count',Sigi)], function(x) substr(x,7,30))
-    Sigi.zero=sapply(Sigi[grepl('zero',Sigi)], function(x) substr(x,6,30))
-    if(ERROR.st[[i]]%in%c("Pois","NB")) Sigi.count=Sigi
-    Sig.terms[[i]]=list(Sigi.count=Sigi.count,Sigi.zero=Sigi.zero)
-    
-    dd=a$`Pr(>|t|)`[match(Sigi,row.names(a))]
-    names(dd)=Sigi
-    if(!ERROR.st[[i]]%in%c("Pois","NB")) 
+    Sig.terms=vector('list',N.species)
+    names(Sig.terms)=TARGETS.name
+    Sig.term.coeff=Sig.terms
+    for (i in 1:N.species)
     {
-      Sigi.count=dd[grepl('count',names(dd))]
-      names(Sigi.count)=sapply( names(Sigi.count)[grepl('count', names(Sigi.count))], function(x) substr(x,7,30))
-      Sigi.zero=dd[grepl('zero',names(dd))]
-      names(Sigi.zero)=sapply( names(Sigi.zero)[grepl('zero', names(Sigi.zero))], function(x) substr(x,6,30))
-      Sig.term.coeff[[i]]=list(Sigi.count=Sigi.count,Sigi.zero=Sigi.zero)
+      a=as.data.frame.matrix(coeftest(Store[[i]]$Fit))
+      write.csv(a,paste("Paper/Anovas/Anova.abundance_",names(Store)[i],".csv",sep=""),row.names=T)
+      
+      id=match('Pr(>|z|)',names(a))
+      if(length(id)>0) names(a)[id]='Pr(>|t|)'
+      
+      Sigi=rownames(a[which(a$`Pr(>|t|)`<0.05),])
+      Sigi=Sigi[!grepl("\\bIntercept\\b",Sigi)]
+      Sigi=Sigi[!grepl('year',Sigi)]
+      Sigi.count=sapply(Sigi[grepl('count',Sigi)], function(x) substr(x,7,30))
+      Sigi.zero=sapply(Sigi[grepl('zero',Sigi)], function(x) substr(x,6,30))
+      if(ERROR.st[[i]]%in%c("Pois","NB")) Sigi.count=Sigi
+      Sig.terms[[i]]=list(Sigi.count=Sigi.count,Sigi.zero=Sigi.zero)
+      
+      dd=a$`Pr(>|t|)`[match(Sigi,row.names(a))]
+      names(dd)=Sigi
+      if(!ERROR.st[[i]]%in%c("Pois","NB")) 
+      {
+        Sigi.count=dd[grepl('count',names(dd))]
+        names(Sigi.count)=sapply( names(Sigi.count)[grepl('count', names(Sigi.count))], function(x) substr(x,7,30))
+        Sigi.zero=dd[grepl('zero',names(dd))]
+        names(Sigi.zero)=sapply( names(Sigi.zero)[grepl('zero', names(Sigi.zero))], function(x) substr(x,6,30))
+        Sig.term.coeff[[i]]=list(Sigi.count=Sigi.count,Sigi.zero=Sigi.zero)
+      }
+      if(ERROR.st[[i]]%in%c("Pois","NB")) Sig.term.coeff[[i]]=list(Sigi.count=dd,Sigi.zero=NULL)
+      
     }
-    if(ERROR.st[[i]]%in%c("Pois","NB")) Sig.term.coeff[[i]]=list(Sigi.count=dd,Sigi.zero=NULL)
-    
   }
+
   
     #Wald statistic
   #Fit is full model, Fit1 is full model - term
@@ -3875,9 +3885,9 @@ if(Do.abundance=="YES")
   }
 
     #1.12.5.2 Bootstrapping approach   #takes 0.2 secs per n.boot iteration   
-  system.time({
-    if(do.boot=="YES")
-    {
+  if(do.boot=="YES")
+  {
+    system.time({
       library(sampling)
       fn.boot=function(dd)   # stratified sampling with replacement
       {
@@ -4081,8 +4091,9 @@ if(Do.abundance=="YES")
         }
         rm(dat,MOD)
       }
+    })
   }
-  })
+  
   
   
   #1.12.6. Plot standardised cpue
@@ -4390,7 +4401,7 @@ if(Do.abundance=="YES")
   }
   hndl.fit.size=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Size/")
   fn.fig(paste(hndl.fit.size,"fit.diagnostics",sep=""),1600,2400)
-  par(mfrow=c(8,3),mar=c(2,2,1.5,1),oma=c(1,1.5,.1,2),mgp=c(2,.7,0))
+  par(mfrow=c(N.species.size,3),mar=c(2,2,1.5,1),oma=c(1,1.5,.1,2),mgp=c(2,.7,0))
   for(i in 1:N.species.size)
   {
     Pos.Diag.fn(MODEL=Store.size[[i]]$Fit,M=1)
@@ -5822,10 +5833,11 @@ if(Do.abundance=="YES")
   #fixed stations
   INDEX=PRED.CPUE
   Plus=0.3
-  INDEX.absolute=INDEX
+  INDEX.absolute=INDEX.nominal=INDEX
   for(i in Species.cpue)
   {
-    Nml=fn.nmnl(dat=subset(DATA.list[[i]],FixedStation=="YES" & BOTDEPTH<210),REL="YES")
+    Nml=Nom.dummy.w[[i]]%>%filter(method=='DLnMean')%>%
+      rename(year=season,low95=lowCL,up95= uppCL)
     dummy=PRED.CPUE[[i]]
     #names(dummy)[5:6]=c("lower.CL","upper.CL")
     dummy$yr=dummy$year
@@ -5836,61 +5848,79 @@ if(Do.abundance=="YES")
     dummy$LOW=dummy$lower.CL
     dummy$CV=dummy$SE/dummy$MEAN
     
-    MaX=max(c(dummy$UP/mean(dummy$MEAN),Nml$up95),na.rm=T)
+    fn.fig(paste0(hndLs,'Stand vs nominal/',Tar.names[i]),2000,2000)  
+    MaX=max(c(dummy$UP,Nml$up95),na.rm=T)
     
     INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,
-                                YLIM=c(0,MaX),XLIM=LimX,Type="points",pLOT=TRUE)
+                                YLIM=c(0,MaX),XLIM=LimX,Type="points",pLOT=FALSE)
     INDEX.absolute[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="NO",REV="NO",n.seq=5,
-                                         YLIM=c(0,MaX),XLIM=LimX,Type="points",pLOT=FALSE)
+                                         YLIM=c(0,MaX),XLIM=LimX,Type="points",pLOT=TRUE)
     
-    #add nominal
-    #with(Nml,points(year+Plus, mean, "o", pch=16, lty=2, col="grey50"))
+    #add nominal  
+    INDEX.nominal[[i]]=Nml%>%
+                        rename(yr=year,
+                               MeAn=mean,
+                               UppCI=up95,
+                               LowCI=low95,
+                               CV=CV,
+                               SE=SE)
+
     with(Nml,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
     suppressWarnings(with(Nml,arrows(x0=year+Plus, y0=low95,x1=year+Plus, y1=up95, 
                                      code=3, angle=90, length=0.025, col="grey70")))
-    mtext(Tar.names[i],3,line=.05,cex=1.1)
+    legend('topleft',c('stand','non-stand'),pch=19,col=c('black','grey70'),bty='n')
+    dev.off()
   }
 
   #5. Export abundance index for population dynamics modelling (SS3)   
-      #Fixed stations
   hnd.indx=handl_OneDrive("Analyses/Data_outs/")
+  #stand
   for(i in 1:length(INDEX.absolute)) write.csv(INDEX.absolute[[i]],paste(hnd.indx,names(INDEX)[i],'/',names(INDEX)[i],".Srvy.FixSt.csv",sep=""),row.names=F)
   for(i in 1:length(INDEX)) write.csv(INDEX[[i]],paste(hnd.indx,names(INDEX)[i],'/',names(INDEX)[i],".Srvy.FixSt_relative.csv",sep=""),row.names=F)
   
+  #nominal
+  for(i in 1:length(INDEX.nominal)) write.csv(INDEX.nominal[[i]],paste(hnd.indx,names(INDEX.nominal)[i],'/',names(INDEX.nominal)[i],".Srvy.FixSt_nominal.csv",sep=""),row.names=F)
+  
+  
   
   #6. create dusky and sandbar figures for RAR
-      #fixed stations
-  San.dusky.species=match(c("Sandbar shark","Dusky shark"),names(INDEX))
-  fn.fig("Paper/Figure 2_sandbar_dusky",1200,2400)
-  par(mfcol=c(2,1),mai=c(.35,.55,.25,.1),oma=c(1.5,1.25,.1,.1),las=1,mgp=c(.04,.6,0))
-  for(i in San.dusky.species)
+  do.dis=FALSE
+  if(do.dis)
   {
-    Nml=fn.nmnl(dat=subset(DATA.list[[i]],FixedStation=="YES"),REL="YES")
+    #fixed stations
+    San.dusky.species=match(c("Sandbar shark","Dusky shark"),names(INDEX))
+    fn.fig("Paper/Figure 2_sandbar_dusky",1200,2400)
+    par(mfcol=c(2,1),mai=c(.35,.55,.25,.1),oma=c(1.5,1.25,.1,.1),las=1,mgp=c(.04,.6,0))
+    for(i in San.dusky.species)
+    {
+      Nml=fn.nmnl(dat=subset(DATA.list[[i]],FixedStation=="YES"),REL="YES")
+      
+      dummy=PRED.CPUE[[i]]
+      #names(dummy)[5:6]=c("lower.CL","upper.CL")
+      dummy$yr=dummy$year
+      id=match("response",names(dummy))
+      if(length(id)>0) names(dummy)[id]="emmean"
+      dummy$MEAN=dummy$emmean
+      dummy$UP=dummy$upper.CL
+      dummy$LOW=dummy$lower.CL
+      dummy$CV=100*dummy$SE/dummy$MEAN
+      
+      MaX=max(c(dummy$UP/mean(dummy$MEAN),Nml$up95),na.rm=T)
+      
+      INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,
+                                  YLIM=c(0,MaX),XLIM=LimX,Type="points")
+      #add nominal
+      with(Nml,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
+      suppressWarnings(with(Nml,arrows(x0=year+Plus, y0=low95,x1=year+Plus, y1=up95, 
+                                       code=3, angle=90, length=0.025, col="grey70")))
+      mtext(Tar.names[i],3,line=.05,cex=1.1)
+    }
+    mtext("Relative CPUE",2,outer=T,line=-0.5,cex=1.5,las=3)
+    mtext("Year",1,outer=T,line=.25,cex=1.5)
+    legend('topleft',c("standardised","nominal"),bty='n',cex=1.25,pch=19,col=c("black","grey70"))
+    dev.off()
     
-    dummy=PRED.CPUE[[i]]
-    #names(dummy)[5:6]=c("lower.CL","upper.CL")
-    dummy$yr=dummy$year
-    id=match("response",names(dummy))
-    if(length(id)>0) names(dummy)[id]="emmean"
-    dummy$MEAN=dummy$emmean
-    dummy$UP=dummy$upper.CL
-    dummy$LOW=dummy$lower.CL
-    dummy$CV=100*dummy$SE/dummy$MEAN
-    
-    MaX=max(c(dummy$UP/mean(dummy$MEAN),Nml$up95),na.rm=T)
-    
-    INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,
-                                YLIM=c(0,MaX),XLIM=LimX,Type="points")
-    #add nominal
-    with(Nml,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
-    suppressWarnings(with(Nml,arrows(x0=year+Plus, y0=low95,x1=year+Plus, y1=up95, 
-                                     code=3, angle=90, length=0.025, col="grey70")))
-    mtext(Tar.names[i],3,line=.05,cex=1.1)
   }
-  mtext("Relative CPUE",2,outer=T,line=-0.5,cex=1.5,las=3)
-  mtext("Year",1,outer=T,line=.25,cex=1.5)
-  legend('topleft',c("standardised","nominal"),bty='n',cex=1.25,pch=19,col=c("black","grey70"))
-  dev.off()
   
   
   #7. Effect of time on size
@@ -5931,25 +5961,29 @@ if(Do.abundance=="YES")
   
 
   #9. create dusky and sandbar figures for RAR
-    #fixed stations
-  San.dusky.species=match(c("Sandbar shark","Dusky shark"),names(INDEX.size))
-  fn.fig("Paper/Figure 5_sandbar_dusky",1200,2400)
-  par(mfcol=c(2,1),mai=c(.35,.55,.25,.1),oma=c(1.5,1.25,.1,.1),las=1,mgp=c(.04,.6,0))
-  for(i in San.dusky.species)
+  if(do.dis)
   {
-    dummy=PRED.size[[i]]
-    #names(dummy)[5:6]=c("lower.CL","upper.CL")
-    dummy$yr=dummy$Mid.Lat
-    dummy$MEAN=dummy$emmean
-    dummy$UP=dummy$upper.CL
-    dummy$LOW=dummy$lower.CL
-    dummy$CV=100*dummy$SE/dummy$MEAN
-    INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points")
-    mtext(names(PRED.z.size)[i],3,line=.05,cex=1.1)
+    #fixed stations
+    San.dusky.species=match(c("Sandbar shark","Dusky shark"),names(INDEX.size))
+    fn.fig("Paper/Figure 5_sandbar_dusky",1200,2400)
+    par(mfcol=c(2,1),mai=c(.35,.55,.25,.1),oma=c(1.5,1.25,.1,.1),las=1,mgp=c(.04,.6,0))
+    for(i in San.dusky.species)
+    {
+      dummy=PRED.size[[i]]
+      #names(dummy)[5:6]=c("lower.CL","upper.CL")
+      dummy$yr=dummy$Mid.Lat
+      dummy$MEAN=dummy$emmean
+      dummy$UP=dummy$upper.CL
+      dummy$LOW=dummy$lower.CL
+      dummy$CV=100*dummy$SE/dummy$MEAN
+      INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points")
+      mtext(names(PRED.z.size)[i],3,line=.05,cex=1.1)
+    }
+    mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
+    mtext("Year",1,outer=T,line=.25,cex=1.5)
+    dev.off()
+    
   }
-  mtext("Relative size",2,outer=T,line=-0.5,cex=1.5,las=3)
-  mtext("Year",1,outer=T,line=.25,cex=1.5)
-  dev.off()
   
   #10. Export size raw data  for population dynamics modelling (SS3)  
   for(i in 1:length(TARGETS))
@@ -5960,7 +5994,7 @@ if(Do.abundance=="YES")
       mutate(FINYEAR=ifelse(Month>6,paste(year,substr(year+1,3,4),sep='-'),
                             paste(year-1,substr(year,3,4),sep='-')))%>%
       filter(SHEET_NO%in%unique(dis.sheet.n$SHEET_NO))  #only use same data used in standardisation
-    if(TARGETS[i]=="TK") dd=dd%>%filter(!year==2002)  #different sampling
+     dd=dd%>%filter(!year==2002)  #different sampling
     #observations
     N.obs=dd%>%
       group_by(FINYEAR,SPECIES)%>%
@@ -5983,6 +6017,102 @@ if(Do.abundance=="YES")
     
   }
 }
+
+#Extra stuff for Sandbar to improve SS model
+do.sandbar.extra=FALSE
+if(do.sandbar.extra)
+{
+  Survey.model=read.csv('C:/Users/myb/OneDrive - Department of Primary Industries And Regional Development/Desktop/kk.csv')
+  Survey.model=Survey.model%>%mutate(df=1,Stations='current model')%>%
+    dplyr::select(yr ,Mean,CV,df,LOW.CI,UP.CI,Stations)%>%
+    rename(year=yr ,response=Mean,SE=CV,lower.CL=LOW.CI,upper.CL=UP.CI)
+  MeAn=mean(Survey.model$response,na.rm=T)
+  Survey.model.rel=Survey.model%>%
+    mutate(response=response/MeAn,
+           lower.CL=lower.CL/MeAn,
+           upper.CL=upper.CL/MeAn)
+  
+  FS=Store.FS$`Sandbar shark`$year.pred%>%mutate(Stations='Fixed only',year=as.numeric(as.character(year)))
+  MeAn=mean(FS$response,na.rm=T)
+  FS.rel=FS%>%
+    mutate(response=response/MeAn,
+           lower.CL=lower.CL/MeAn,
+           upper.CL=upper.CL/MeAn)
+  
+  ALL=Store$`Sandbar shark`$year.pred%>%mutate(Stations='All',year=as.numeric(as.character(year)))
+  MeAn=mean(ALL$response,na.rm=T)
+  ALL.rel=ALL%>%
+    mutate(response=response/MeAn,
+           lower.CL=lower.CL/MeAn,
+           upper.CL=upper.CL/MeAn)
+  
+  
+  rbind(FS.rel,ALL.rel,Survey.model.rel)%>%
+    ggplot(aes(year,response,color=Stations))+
+    geom_point()+
+    geom_errorbar(aes(ymin=lower.CL,ymax=upper.CL))
+  
+  
+  
+  p1=fn.rate.inc(d=FS%>%
+                   rename(season=year,
+                          mean=response,
+                          lowCL=lower.CL,
+                          uppCL=upper.CL)%>%
+                   mutate(season=as.numeric(as.character(season))),
+                 max.yr=2021,
+                 Metric='Weight, fixed stations',
+                 first.yr=2007)+
+    ggtitle('Stand - only Fixed stations')+
+    theme(plot.title = element_text(size =14))
+  p2=fn.rate.inc(d=ALL%>%
+                   rename(season=year,
+                          mean=response,
+                          lowCL=lower.CL,
+                          uppCL=upper.CL)%>%
+                   mutate(season=as.numeric(as.character(season))),
+                 max.yr=2021,
+                 Metric='Weight, all stations',
+                 first.yr=2007)+ggtitle('Stand - All stations')+
+    theme(plot.title = element_text(size =14))
+  
+  p3=fn.rate.inc(d=Survey.model%>%
+                   rename(season=year,
+                          mean=response,
+                          lowCL=lower.CL,
+                          uppCL=upper.CL)%>%
+                   mutate(season=as.numeric(as.character(season))),
+                 max.yr=2021,
+                 Metric='Weight, all stations',
+                 first.yr=2007)+ggtitle('Currently used in SS')+
+    theme(plot.title = element_text(size =14))
+  
+  p4=fn.rate.inc(d=Nom.dummy.w$`Sandbar shark`%>%
+                   filter(method=='Mean'),
+                 max.yr=2021,
+                 Metric='Weight, fixed stations',
+                 first.yr=2007)+ggtitle('Non stand - Mean')+
+    theme(plot.title = element_text(size =14))
+  
+  p5=fn.rate.inc(d=Nom.dummy.w$`Sandbar shark`%>%
+                   filter(method=='Nominal'),
+                 max.yr=2021,
+                 Metric='Weight, fixed stations',
+                 first.yr=2007)+ggtitle('Non stand - Nominal')+
+    theme(plot.title = element_text(size =14))
+  
+  p6=fn.rate.inc(d=Nom.dummy.w$`Sandbar shark`%>%
+                   filter(method=='DLnMean'),
+                 max.yr=2021,
+                 Metric='Weight, fixed stations',
+                 first.yr=2007)+ggtitle('Non stand - DLnMean')+
+    theme(plot.title = element_text(size =14))
+  
+  ggarrange(p1,p2,p3,p4,p5,p6,ncol=2,nrow=3) 
+  
+  ggsave(paste0(hndLs,"/Sandbar compare different indices.tiff"),width = 6,height = 8,compression = "lzw")
+}
+
 
 # 4. REPORT_Ecosystem indicators FROM FISHERY INDEPENDENT SURVEYS----------------------------------------------------------------------
 if(Do.ecosystems=="YES")
