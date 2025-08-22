@@ -75,6 +75,7 @@ library(doParallel)
 library(imputeTS)
 library(ggrepel)
 library(ggpubr)
+library(ggpmisc)
 
 #install.packages("countreg", repos = "http://R-Forge.R-project.org")
 #see great vignette: https://cran.r-project.org/web/packages/pscl/vignettes/countreg.pdf
@@ -148,6 +149,7 @@ bySEX="YES"  #control if size frequency separated by sex or not
 Do.abundance="YES"
 do.GAM="YES"  #define if using GAM or GLM approach
 do.GLM="NO"
+stand.for.yr.only=TRUE  #set to FALSE if also want to show effects of other terms (paper only)
 First.LL.yr=2001
 These.Months=5:8
 explore.cpue="NO"
@@ -166,7 +168,7 @@ Do.jpeg="YES"
 Min.n.hooks.survey=20
 use.only.fixed.stations=FALSE #set to TRUE if only use Fixed Stations
 
-#control if doing sex ratio anlysis
+#control if doing sex ratio analysis
 do.sex.ratio="NO"
 
 #control if doing multivariate analysis
@@ -1223,7 +1225,7 @@ if(Do.abundance=="YES")
               "N.hooks.Fixed","SOAK.TIME","Method","FixedStation","Station.no.")
   
   #1.6    Construct wide database for analysis   
-  Effort.data.fun=function(target,SUBSET)
+  Effort.data.fun=function(target,SUBSET,grouping.var='date',calc.other.sp=FALSE)
   {
     #remove record if no effort data or outside distribution
     if(SUBSET=="NO")DAT=subset(DATA,N.hooks.Fixed>Min.n.hooks.survey)
@@ -1233,51 +1235,86 @@ if(Do.abundance=="YES")
     
     DAT=subset(DAT,year>2001)  #only 1 shot done during May:August in 2001
     
+    #remove shots with no catch due to baitless hooks
+    baitless=DAT[grep('baitless',tolower(DAT$COMMENTS.hdr)),]%>%
+      filter(grepl('all hooks',tolower(COMMENTS.hdr)))
+    if(nrow(baitless)>0) DAT=DAT%>%filter(!SHEET_NO%in%unique(baitless$SHEET_NO)) 
+
+    
     #target species catch 
     DAT$Catch.Target=with(DAT,ifelse(SPECIES==target,Number,0))
     DAT$Catch.Target.w=with(DAT,ifelse(SPECIES==target,Twt,0))
     
     #other species catch
-    DAT$Catch.Dusky=with(DAT,ifelse(SPECIES=="BW",Number,0))
-    DAT$Catch.Sandbar=with(DAT,ifelse(SPECIES=="TK",Number,0))
-    DAT$Catch.Tiger=with(DAT,ifelse(SPECIES=="TG",Number,0))
-    DAT$Catch.Scalloped=with(DAT,ifelse(SPECIES=="HS",Number,0))
-    DAT$Catch.Blacktip=with(DAT,ifelse(SPECIES=="BT",Number,0))
-    DAT$Catch.SpotTail=with(DAT,ifelse(SPECIES=="SO",Number,0))
-    DAT$Catch.Milk=with(DAT,ifelse(SPECIES=="MI",Number,0))
-    
-    DAT$Catch.Dusky.w=with(DAT,ifelse(SPECIES=="BW",Twt,0))
-    DAT$Catch.Sandbar.w=with(DAT,ifelse(SPECIES=="TK",Twt,0))
-    DAT$Catch.Tiger.w=with(DAT,ifelse(SPECIES=="TG",Twt,0))
-    DAT$Catch.Scalloped.w=with(DAT,ifelse(SPECIES=="HS",Twt,0))
-    DAT$Catch.Blacktip.w=with(DAT,ifelse(SPECIES=="BT",Twt,0))
-    DAT$Catch.SpotTail.w=with(DAT,ifelse(SPECIES=="SO",Twt,0))
-    DAT$Catch.Milk.w=with(DAT,ifelse(SPECIES=="MI",Twt,0))
+    if(calc.other.sp)
+    {
+      DAT$Catch.Dusky=with(DAT,ifelse(SPECIES=="BW",Number,0))
+      DAT$Catch.Sandbar=with(DAT,ifelse(SPECIES=="TK",Number,0))
+      DAT$Catch.Tiger=with(DAT,ifelse(SPECIES=="TG",Number,0))
+      DAT$Catch.Scalloped=with(DAT,ifelse(SPECIES=="HS",Number,0))
+      DAT$Catch.Blacktip=with(DAT,ifelse(SPECIES=="BT",Number,0))
+      DAT$Catch.SpotTail=with(DAT,ifelse(SPECIES=="SO",Number,0))
+      DAT$Catch.Milk=with(DAT,ifelse(SPECIES=="MI",Number,0))
+      
+      DAT$Catch.Dusky.w=with(DAT,ifelse(SPECIES=="BW",Twt,0))
+      DAT$Catch.Sandbar.w=with(DAT,ifelse(SPECIES=="TK",Twt,0))
+      DAT$Catch.Tiger.w=with(DAT,ifelse(SPECIES=="TG",Twt,0))
+      DAT$Catch.Scalloped.w=with(DAT,ifelse(SPECIES=="HS",Twt,0))
+      DAT$Catch.Blacktip.w=with(DAT,ifelse(SPECIES=="BT",Twt,0))
+      DAT$Catch.SpotTail.w=with(DAT,ifelse(SPECIES=="SO",Twt,0))
+      DAT$Catch.Milk.w=with(DAT,ifelse(SPECIES=="MI",Twt,0))
+      
+      TABLE=aggregate(cbind(Catch.Target,Catch.Dusky,Catch.Sandbar,Catch.Tiger,Catch.Scalloped,
+                            Catch.Blacktip,Catch.SpotTail,Catch.Milk)~SHEET_NO,data=DAT,sum,na.rm=T)
+      TABLE.w=aggregate(cbind(Catch.Target.w,Catch.Dusky.w,Catch.Sandbar.w,Catch.Tiger.w,Catch.Scalloped.w,
+                              Catch.Blacktip.w,Catch.SpotTail.w,Catch.Milk.w)~SHEET_NO,data=DAT,sum,na.rm=T)
+      colnames(TABLE.w)=str_remove( colnames(TABLE.w),'.w')
+      
+    }
+
     
     #reshape catch data
-    TABLE=aggregate(cbind(Catch.Target,Catch.Dusky,Catch.Sandbar,Catch.Tiger,Catch.Scalloped,
-                          Catch.Blacktip,Catch.SpotTail,Catch.Milk)~SHEET_NO,data=DAT,sum,na.rm=T)
-    TABLE.w=aggregate(cbind(Catch.Target.w,Catch.Dusky.w,Catch.Sandbar.w,Catch.Tiger.w,Catch.Scalloped.w,
-                          Catch.Blacktip.w,Catch.SpotTail.w,Catch.Milk.w)~SHEET_NO,data=DAT,sum,na.rm=T)
-    colnames(TABLE.w)=str_remove( colnames(TABLE.w),'.w')
+    TABLE=DAT%>%
+            group_by(!!sym(grouping.var))%>%
+            summarise(Catch.Target = sum(Catch.Target,na.rm=T))%>%
+            ungroup()%>%
+            data.frame()
+    TABLE.w=DAT%>%
+            group_by(!!sym(grouping.var))%>%
+            summarise(Catch.Target.w = sum(Catch.Target.w,na.rm=T))%>%
+            ungroup()%>%
+            rename(Catch.Target=Catch.Target.w)%>%
+            data.frame()
     
-    DAT1=DAT[!duplicated(DAT$SHEET_NO),match(THESEVARS,names(DAT))]
+
+    DAT1=DAT[,match(THESEVARS,names(DAT))]%>%
+            mutate(dummy=paste(date,SHEET_NO))%>%
+            distinct(dummy,.keep_all = T)%>%
+            group_by(!!sym(grouping.var))%>%
+            summarise(Month=min(Month,na.rm=T),
+                      year=min(year,na.rm=T),
+                      BOAT=unique(BOAT,na.rm=T),
+                      BOTDEPTH=mean(BOTDEPTH,na.rm=T),
+                      depth.bin=round(mean(depth.bin,na.rm=T)),
+                      Moon=unique(Moon,na.rm=T),
+                      Mid.Lat=mean(Mid.Lat,na.rm=T),
+                      Mid.Long=mean(Mid.Long,na.rm=T),
+                      N.hooks = sum(N.hooks,na.rm=T),
+                      Temp.res=mean(Temp.res,na.rm=T),
+                      N.hooks.Fixed = sum(N.hooks.Fixed,na.rm=T),
+                      SOAK.TIME=mean(SOAK.TIME,na.rm=T),
+                      Method=unique(Method),
+                      FixedStation=max(FixedStation))%>%
+                      ungroup()%>%
+                      data.frame()
+
     DAT1=DAT1%>%
       mutate(finyear=case_when(Month%in%c(7:12)~paste(year,substr(year+1,3,4),sep='-'),
                                Month%in%c(1:6)~paste(year-1,substr(year,3,4),sep='-')))       
       
-    TABLE=merge(TABLE,DAT1,by="SHEET_NO",all.x=TRUE)
-    TABLE.w=merge(TABLE.w,DAT1,by="SHEET_NO",all.x=TRUE)
-    
-    #remove shots with no catch due to baitless hooks
-    baitless=DAT[grep('baitless',tolower(DAT$COMMENTS.hdr)),]%>%
-      filter(grepl('all hooks',tolower(COMMENTS.hdr)))
-    if(nrow(baitless)>0)
-    {
-      TABLE=TABLE%>%filter(!SHEET_NO%in%baitless$SHEET_NO) 
-      TABLE.w=TABLE.w%>%filter(!SHEET_NO%in%baitless$SHEET_NO) 
-    }
-       
+    TABLE=TABLE%>%left_join(DAT1,by=grouping.var)
+    TABLE.w=TABLE.w%>%left_join(DAT1,by=grouping.var)
+
     
     #proportion of records with target catch
     prop.with.catch=round(100*sum(TABLE$Catch.Target>0)/length(TABLE$Catch.Target),0)
@@ -1437,7 +1474,7 @@ if(Do.abundance=="YES")
     Prop.Ktch.list[[i]]=dum$prop.ktch
   }
   
-  YEAR=sort(unique(DATA.list[[i]]$year))
+  YEAR=sort(unique(DATA.list$`Sandbar shark`$year))
   N.yrs=length(YEAR) 
   
     #1.10.1. Calculate annual mean CPUE (aggregated by finyear)  
@@ -1490,43 +1527,44 @@ if(Do.abundance=="YES")
   }
     
   #Calculate rate of increase for sandbar shark
+  fn.rate.inc=function(d,max.yr,Metric,first.yr)
+  {
+    first.val=d%>%filter(season==first.yr)%>%pull(mean)
+    last.val=d%>%filter(season==max.yr)%>%pull(mean)
+    Percent.increase=100*((last.val-first.val)/first.val)
+    Percent.increase.yr=round(Percent.increase/length(first.yr:max.yr),2)
+    #Titl=paste(Metric,'. Annual increase: ',Percent.increase.yr,'%',sep='')
+    Titl=Metric
+    d=d%>%
+      mutate(Rel.cpue=mean/first.val,
+             rel.lowCL=lowCL/first.val,
+             rel.uppCL=uppCL/first.val)
+    p=d%>%
+      ggplot(aes(season,Rel.cpue))+
+      geom_point()+
+      theme_PA()+
+      geom_errorbar(aes(ymin = rel.lowCL, ymax = rel.uppCL), width = 0.2)+
+      stat_poly_line(data=d%>%filter(season>=first.yr & season<=max.yr)) +
+      stat_poly_eq(data=d%>%filter(season>=first.yr & season<=max.yr),
+                   use_label(c("eq", "R2")))+ylim(0,NA)+
+      ggtitle(Titl)
+    return(p)
+  }
   if(explore.cpue=="YES")
   {
-    fn.rate.inc=function(d,max.yr,Metric,first.yr)
-    {
-      first.val=d%>%filter(season==first.yr)%>%pull(mean)
-      last.val=d%>%filter(season==max.yr)%>%pull(mean)
-      Percent.increase=100*((last.val-first.val)/first.val)
-      Percent.increase.yr=round(Percent.increase/length(first.yr:max.yr),2)
-      
-      d=d%>%
-        mutate(Rel.cpue=mean/first.val,
-               rel.lowCL=lowCL/first.val,
-               rel.uppCL=uppCL/first.val)
-      p=d%>%
-        ggplot(aes(season,Rel.cpue))+
-        geom_point()+
-        theme_PA()+
-        geom_errorbar(aes(ymin = rel.lowCL, ymax = rel.uppCL), width = 0.2)+
-        stat_poly_line(data=d%>%filter(season>=first.yr & season<=max.yr)) +
-        stat_poly_eq(data=d%>%filter(season>=first.yr & season<=max.yr),
-                     use_label(c("eq", "R2")))+ylim(0,NA)
-        #ggtitle(paste(Metric,'. Annual increase: ',Percent.increase.yr,'%',sep=''))
-      return(p)
-    }
-    p1=fn.rate.inc(d=Nom.dummy.FS$`Sandbar shark`%>%
+    p1=fn.rate.inc(d=Nom.dummy$`Sandbar shark`%>%
                       filter(method=='DLnMean'),
                 max.yr=2021,
-                Metric='Numbers, fixed stations',
+                Metric='Numbers, all stations',
                 first.yr=2007)
-    p2=fn.rate.inc(d=Nom.dummy.FS.w$`Sandbar shark`%>%
+    p2=fn.rate.inc(d=Nom.dummy.w$`Sandbar shark`%>%
                       filter(method=='DLnMean'),
                 max.yr=2021,
-                Metric='Weight, fixed stations',
+                Metric='Weight, all stations',
                 first.yr=2007)
     ggarrange(p1,p2,ncol=1,nrow=2)
     ggsave(handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Abundance/Nominal cpue/Sandbar shark_percent increase.tiff"),
-           width = 8,height = 8,compression = "lzw")
+           width = 6,height = 6,compression = "lzw")
   }
 
     #1.10.2 Extract Effort series
@@ -1537,6 +1575,7 @@ if(Do.abundance=="YES")
   
   
   #1.11   ---- Standardised cpue ----#
+  do.numbers=FALSE  #decide if running standardisation for numbers as res var
   cfac=function(x,breaks=NULL)
   {
     x=round(x,2)  
@@ -1858,9 +1897,8 @@ if(Do.abundance=="YES")
   Res.var="Catch.Target"   #define response var and offset
   Offset='offset(log.Ef)'
   
-  #1.11.2. Select terms and error structure
-    #Numbers
-  if(do.GAM=="YES" & Select.term=="YES")
+  #1.11.2. Select terms and error structure 
+  if(Select.term=="YES")
   {
     LOgLik=function(MoD)  #get model Loglikelihood
     {
@@ -1898,42 +1936,6 @@ if(Do.abundance=="YES")
       Evidence.ratio=c(outer(Weight[id],Weight, "/"))
       return(list(Best.Mod=id,Delta=Delta,Like=Like.model.give.dat,Weight=Weight,Evidence.ratio_how.much.better=Evidence.ratio))
     }
-    
-    cl <- makeCluster(detectCores()-1)
-    registerDoParallel(cl)
-    getDoParWorkers()
-    system.time({Select.term_error=foreach(i=Species.cpue,.packages=c('dplyr','doParallel')) %dopar%
-      {
-        if(names(DATA.list)[i]=="Sandbar shark")
-        {
-          Terms=c("year","Month","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","s(Temp.res,k=3)","Moon")
-        }else
-        {
-          Terms=c("year","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","s(Temp.res,k=3)","Moon")
-        }
-        d=DATA.list[[i]] %>% filter(BOTDEPTH<210 & FixedStation=="YES") %>%
-          mutate(Mid.Lat=abs(Mid.Lat),
-                 log.Ef=log(SOAK.TIME*N.hooks.Fixed),
-                 year=factor(year,levels=unique(sort(year))),
-                 Month=factor(Month,levels=unique(sort(Month))),
-                 Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
-        tested.mods=foreach(t =1:length(Terms),.errorhandling='remove',.packages=c('zigam','mgcv','doParallel'))%dopar%
-          {
-            FRMLA=formula(paste(Res.var,paste(c(Terms[1:t],Offset),collapse="+"),sep="~"))
-            Gam.Pois=gam(FRMLA,data=d,method = "REML",family=poisson)
-            Gam.Nb=gam(FRMLA,data=d,method = "REML",family = nb)
-            Gam.ZIP=zipgam(lambda.formula=FRMLA,pi.formula=FRMLA,data=d)
-            Gam.ZINB=zinbgam(mu.formula=FRMLA,pi.formula=FRMLA,data=d)
-            dummy=list(Pois=Gam.Pois,NB=Gam.Nb,ZIP=Gam.ZIP,ZINB=Gam.ZINB)
-            return(dummy)
-          }
-        for(t in 1:length(Terms))names(tested.mods)[t]=paste(Terms[1:t],collapse="+")
-        return(tested.mods)
-      }})    #takes 8 minutes
-    names(Select.term_error)=names(DATA.list)
-    stopCluster(cl) 
-    
-    #  Select best model terms (i.e. model structure) based on AIC and deviance explained
     Select.best.modl.str=function(d,Res.var1=Res.var,Offset1=Offset)
     {
       #set up table
@@ -1982,13 +1984,54 @@ if(Do.abundance=="YES")
       {
         AIC.w.r=fn.AIC.ratio(AiC[,t])
         AIC.der[[t-1]]=data.frame(AIC=round(AiC[,t],1),
-                     deltaAIC=round(AIC.w.r$Delta,1),
-                     AIC.weight=formatC(AIC.w.r$Weight, format = "e", digits = 1))
+                                  deltaAIC=round(AIC.w.r$Delta,1),
+                                  AIC.weight=formatC(AIC.w.r$Weight, format = "e", digits = 1))
         Best[[t-1]]=teRmS[AIC.w.r$Best.Mod]
       }
       AiC.tabl=cbind(Model=teRmS,do.call(cbind,AIC.der))
       return(list(AIC=AiC.tabl,Deviance.exp=Dev.Exp,Best=unlist(Best)))
     }
+    
+  }
+  
+    #Numbers
+  if(do.GAM=="YES" & Select.term=="YES" & do.numbers)
+  {
+    cl <- makeCluster(detectCores()-1)
+    registerDoParallel(cl)
+    getDoParWorkers()
+    system.time({Select.term_error=foreach(i=Species.cpue,.packages=c('dplyr','doParallel')) %dopar%
+      {
+        if(names(DATA.list)[i]=="Sandbar shark")
+        {
+          Terms=c("year","Month","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","s(Temp.res,k=3)","Moon")
+        }else
+        {
+          Terms=c("year","s(Mid.Lat,k=3)","s(BOTDEPTH,k=3)","s(Temp.res,k=3)","Moon")
+        }
+        d=DATA.list[[i]] %>% filter(BOTDEPTH<210 & FixedStation=="YES") %>%
+          mutate(Mid.Lat=abs(Mid.Lat),
+                 log.Ef=log(SOAK.TIME*N.hooks.Fixed),
+                 year=factor(year,levels=unique(sort(year))),
+                 Month=factor(Month,levels=unique(sort(Month))),
+                 Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
+        tested.mods=foreach(t =1:length(Terms),.errorhandling='remove',.packages=c('zigam','mgcv','doParallel'))%dopar%
+          {
+            FRMLA=formula(paste(Res.var,paste(c(Terms[1:t],Offset),collapse="+"),sep="~"))
+            Gam.Pois=gam(FRMLA,data=d,method = "REML",family=poisson)
+            Gam.Nb=gam(FRMLA,data=d,method = "REML",family = nb)
+            Gam.ZIP=zipgam(lambda.formula=FRMLA,pi.formula=FRMLA,data=d)
+            Gam.ZINB=zinbgam(mu.formula=FRMLA,pi.formula=FRMLA,data=d)
+            dummy=list(Pois=Gam.Pois,NB=Gam.Nb,ZIP=Gam.ZIP,ZINB=Gam.ZINB)
+            return(dummy)
+          }
+        for(t in 1:length(Terms))names(tested.mods)[t]=paste(Terms[1:t],collapse="+")
+        return(tested.mods)
+      }})    #takes 8 minutes
+    names(Select.term_error)=names(DATA.list)
+    stopCluster(cl) 
+    
+    #  Select best model terms (i.e. model structure) based on AIC and deviance explained
     SLCT.TRM=vector('list',length(Species.cpue))
     names(SLCT.TRM)=names(DATA.list)
     for(i in Species.cpue) SLCT.TRM[[i]]=Select.best.modl.str(d=Select.term_error[[i]])
@@ -2197,7 +2240,7 @@ if(Do.abundance=="YES")
     dev.off()
     
   }
-  if(do.GLM=="YES" & Select.term=="YES")
+  if(do.GLM=="YES" & Select.term=="YES" & do.numbers)
   {
     # Set up different distribution function
     #Poisson and NB
@@ -3397,7 +3440,7 @@ if(Do.abundance=="YES")
   }
   
   #1.11.3  Fit Best model and error structure 
-  if(do.GAM=="YES")
+  if(do.GAM=="YES" & Select.term=="NO")
   {
     #Numbers
     BEST.model=vector('list',N.species)
@@ -3425,17 +3468,18 @@ if(Do.abundance=="YES")
     
     #Weights   
     BEST.model.w=BEST.model
-    BEST.model.w$`Sandbar shark`=formula(cpue ~ year+ Month+ s(Mid.Lat, k = 3)+ s(BOTDEPTH,k = 3))
-    BEST.model.w$'Milk shark'=BEST.model.w$`Sandbar shark`
-    BEST.model.w$"Dusky shark"=BEST.model.w$`Spot-tail shark`=formula(cpue ~ year+ s(Mid.Lat, k = 3))
-    BEST.model.w$'Tiger shark'=formula(cpue ~ year+ s(BOTDEPTH,k = 3))
-    BEST.model.w$`Blacktip sharks`=formula(cpue ~ year+ Month+ s(BOTDEPTH,k = 3)+Moon)  
-    BEST.model.w$`Scalloped hammerhead`=BEST.model.w$`Great hammerhead`=formula(cpue ~ year+ Month+ s(Mid.Lat, k = 3))
+    BEST.model.w$`Sandbar shark`=formula(cpue ~ year+ Month+ s(Mid.Lat, k = 3)+ s(BOTDEPTH,k = 3)+Moon)
+    BEST.model.w$`Milk shark`=formula(cpue ~ year+ Month+ s(Mid.Lat, k = 3)+ s(BOTDEPTH,k = 3))
+    BEST.model.w$`Dusky shark`=BEST.model.w$`Spot-tail shark`=formula(cpue ~ year+ s(Mid.Lat, k = 3)+s(BOTDEPTH,k=3)+Moon)
+    BEST.model.w$`Tiger shark`=formula(cpue ~ year+ s(Mid.Lat, k = 3)+ s(BOTDEPTH,k = 3))
+    BEST.model.w$`Blacktip sharks`=formula(cpue ~ year+ Month+ s(BOTDEPTH,k = 3)++s(Temp.res,k=3)+Moon)  
+    BEST.model.w$`Scalloped hammerhead`=formula(cpue ~ year+ Month+ s(Mid.Lat, k = 3)+s(BOTDEPTH,k=3)+s(Temp.res,k=3))
+    BEST.model.w$`Great hammerhead`=formula(cpue ~ year+ Month+ s(Mid.Lat, k = 3))
     BEST.model.w$`Sliteye shark`=formula(cpue ~ year+Month+s(Mid.Lat,k=3)+s(BOTDEPTH,k=3)+Moon)
     BEST.model.w$`Silvertip shark`=formula(cpue ~ year+Month+s(Temp.res,k=3)+Moon)
   }
   
-  if(do.GLM=="YES")
+  if(do.GLM=="YES" & Select.term=="NO")
   {
     BEST.model=vector('list',N.species)
     names(BEST.model)=names(DATA.list)
@@ -3458,7 +3502,16 @@ if(Do.abundance=="YES")
     ERROR.st$"Tiger shark"=ERROR.st$"Dusky shark"="NB"
     ERROR.st$"Spot-tail shark"=ERROR.st$"Scalloped hammerhead"=ERROR.st$"Sliteye shark"="ZIP"
   }
-
+  
+  if(stand.for.yr.only)
+  {
+    for(i in Species.cpue)
+    {
+      BEST.model[[i]]=formula(paste(Res.var,paste(c("year",Offset),collapse="+"),sep="~"))
+      BEST.model.w[[i]]=formula(cpue ~ year)
+    }
+  }
+  
   #replace calendar year for financial year
   for(i in Species.cpue)
   {
@@ -3482,9 +3535,17 @@ if(Do.abundance=="YES")
       if(ErroR=="NB")  Fit=gam(FORMULA, data=d,method = "REML",family = nb)
       if(ErroR=="ZIP") Fit=zipgam(lambda.formula=FORMULA,pi.formula=FORMULA,data=d)
       if(ErroR=="ZINB") Fit=zinbgam(mu.formula=FORMULA,pi.formula=FORMULA, data=d)
-      if(ErroR=="Tweedie") Fit=bam(FORMULA,data=d,family='tw',method="fREML",discrete=TRUE)
-      
-      
+      if(ErroR=="Tweedie")
+      {
+        if(any(grepl("k = ", attr(terms(FORMULA),'term.labels'))))
+        {
+          Fit=bam(FORMULA,data=d,family='tw',method="fREML",discrete=TRUE)
+        }else
+        {
+          Fit=gam(FORMULA,data=d,family='tw',method="REML")  
+        }
+      }
+
       #Predictions
       if(any(grepl('offset',FORMULA)))
       {
@@ -3513,19 +3574,22 @@ if(Do.abundance=="YES")
         year.pred=summary(emmeans(Fit,"year", type="response"))
         
         Lat.pred=NULL
-        used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
-        if(sum(used.term)>0)
-        {
-          Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
-          Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.5))))
-        }
-        
         Depth.pred=NULL
-        used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
-        if(sum(used.term)>0)
+        if(!stand.for.yr.only)
         {
-          ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
-          Depth.pred=summary(emmeans(Fit,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10))))
+          used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
+          if(sum(used.term)>0)
+          {
+            Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
+            Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.5))))
+          }
+          
+          used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
+          if(sum(used.term)>0)
+          {
+            ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
+            Depth.pred=summary(emmeans(Fit,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10))))
+          }
         }
       }
 
@@ -3544,19 +3608,23 @@ if(Do.abundance=="YES")
       year.pred=summary(emmeans(Fit,"year", type="response"))
       
       Lat.pred=NULL
-      used.term=grepl("log.Mid.Lat", attr(terms(FORMULA),'term.labels'))
-      if(sum(used.term)>0)
-      {
-        Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
-        Lat.pred=summary(emmeans(Fit,"log.Mid.Lat", type="response",at=list(log.Mid.Lat=log(seq(Lata[1],Lata[2],.1)))))
-      }
-      
       Depth.pred=NULL
-      used.term=grepl("log.BOTDEPTH", attr(terms(FORMULA),'term.labels'))
-      if(sum(used.term)>0)
+      
+      if(!stand.for.yr.only)
       {
-        ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
-        Depth.pred=summary(emmeans(Fit,"log.BOTDEPTH", type="response",at=list(log.BOTDEPTH=log(seq(ZZ[1],ZZ[2],10)))))
+        used.term=grepl("log.Mid.Lat", attr(terms(FORMULA),'term.labels'))
+        if(sum(used.term)>0)
+        {
+          Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
+          Lat.pred=summary(emmeans(Fit,"log.Mid.Lat", type="response",at=list(log.Mid.Lat=log(seq(Lata[1],Lata[2],.1)))))
+        }
+        
+        used.term=grepl("log.BOTDEPTH", attr(terms(FORMULA),'term.labels'))
+        if(sum(used.term)>0)
+        {
+          ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
+          Depth.pred=summary(emmeans(Fit,"log.BOTDEPTH", type="response",at=list(log.BOTDEPTH=log(seq(ZZ[1],ZZ[2],10)))))
+        }
       }
     }
     
@@ -3577,7 +3645,6 @@ if(Do.abundance=="YES")
   Store=vector('list',N.species)   
   names(Store)=names(DATA.list)
   Store.n=Store
-  do.numbers=FALSE
   system.time(for(i in Species.cpue)     
   {
     print(paste('-------------Fitting models to ------',names(DATA.list.w)[i]))
@@ -3642,8 +3709,8 @@ if(Do.abundance=="YES")
       #run model
     Store[[i]]=fit.best(d=d,FORMULA=BEST.model.w[[i]],ErroR='Tweedie')  
     
-    
-    rm(DAT,TT,d)
+    if(exists('TT')) rm(TT)
+    rm(DAT,d)
   }) 
   Store.out.dis.size=Store
 
@@ -4095,7 +4162,6 @@ if(Do.abundance=="YES")
   }
   
   
-  
   #1.12.6. Plot standardised cpue
   fn.relative=function(D)
   {
@@ -4174,7 +4240,7 @@ if(Do.abundance=="YES")
     }
     return(dat.plt)
   }
- 
+  
   
   #1.13.   Trends in Sex ratio           
   if(do.sex.ratio=="YES")
@@ -5830,7 +5896,6 @@ if(Do.abundance=="YES")
   
    
   #4. Effect of time on abundance  
-  #fixed stations
   INDEX=PRED.CPUE
   Plus=0.3
   INDEX.absolute=INDEX.nominal=INDEX
@@ -5857,11 +5922,11 @@ if(Do.abundance=="YES")
                                          YLIM=c(0,MaX),XLIM=LimX,Type="points",pLOT=TRUE)
     
     #add nominal  
-    INDEX.nominal[[i]]=Nml%>%
-                        rename(yr=year,
+    INDEX.nominal[[i]]=Nom.dummy.w[[i]]%>%
+                        rename(yr=season,
                                MeAn=mean,
-                               UppCI=up95,
-                               LowCI=low95,
+                               UppCI=uppCL,
+                               LowCI=lowCL,
                                CV=CV,
                                SE=SE)
 
@@ -6018,12 +6083,12 @@ if(Do.abundance=="YES")
   }
 }
 
-#Extra stuff for Sandbar to improve SS model
+#Sandbar compare different indices
 do.sandbar.extra=FALSE
 if(do.sandbar.extra)
 {
   Survey.model=read.csv('C:/Users/myb/OneDrive - Department of Primary Industries And Regional Development/Desktop/kk.csv')
-  Survey.model=Survey.model%>%mutate(df=1,Stations='current model')%>%
+  Survey.model=Survey.model%>%mutate(df=1,Stations='current SS model')%>%
     dplyr::select(yr ,Mean,CV,df,LOW.CI,UP.CI,Stations)%>%
     rename(year=yr ,response=Mean,SE=CV,lower.CL=LOW.CI,upper.CL=UP.CI)
   MeAn=mean(Survey.model$response,na.rm=T)
@@ -6032,13 +6097,7 @@ if(do.sandbar.extra)
            lower.CL=lower.CL/MeAn,
            upper.CL=upper.CL/MeAn)
   
-  FS=Store.FS$`Sandbar shark`$year.pred%>%mutate(Stations='Fixed only',year=as.numeric(as.character(year)))
-  MeAn=mean(FS$response,na.rm=T)
-  FS.rel=FS%>%
-    mutate(response=response/MeAn,
-           lower.CL=lower.CL/MeAn,
-           upper.CL=upper.CL/MeAn)
-  
+
   ALL=Store$`Sandbar shark`$year.pred%>%mutate(Stations='All',year=as.numeric(as.character(year)))
   MeAn=mean(ALL$response,na.rm=T)
   ALL.rel=ALL%>%
@@ -6047,24 +6106,12 @@ if(do.sandbar.extra)
            upper.CL=upper.CL/MeAn)
   
   
-  rbind(FS.rel,ALL.rel,Survey.model.rel)%>%
+  p1=rbind(ALL.rel,Survey.model.rel)%>%
     ggplot(aes(year,response,color=Stations))+
     geom_point()+
-    geom_errorbar(aes(ymin=lower.CL,ymax=upper.CL))
+    geom_errorbar(aes(ymin=lower.CL,ymax=upper.CL))+
+    theme_PA()+theme(legend.title = element_blank(),legend.position = 'top')
   
-  
-  
-  p1=fn.rate.inc(d=FS%>%
-                   rename(season=year,
-                          mean=response,
-                          lowCL=lower.CL,
-                          uppCL=upper.CL)%>%
-                   mutate(season=as.numeric(as.character(season))),
-                 max.yr=2021,
-                 Metric='Weight, fixed stations',
-                 first.yr=2007)+
-    ggtitle('Stand - only Fixed stations')+
-    theme(plot.title = element_text(size =14))
   p2=fn.rate.inc(d=ALL%>%
                    rename(season=year,
                           mean=response,
@@ -6072,9 +6119,9 @@ if(do.sandbar.extra)
                           uppCL=upper.CL)%>%
                    mutate(season=as.numeric(as.character(season))),
                  max.yr=2021,
-                 Metric='Weight, all stations',
-                 first.yr=2007)+ggtitle('Stand - All stations')+
-    theme(plot.title = element_text(size =14))
+                 Metric='Stand - All stations',
+                 first.yr=2007)+
+        theme(plot.title = element_text(size =14))
   
   p3=fn.rate.inc(d=Survey.model%>%
                    rename(season=year,
@@ -6083,30 +6130,30 @@ if(do.sandbar.extra)
                           uppCL=upper.CL)%>%
                    mutate(season=as.numeric(as.character(season))),
                  max.yr=2021,
-                 Metric='Weight, all stations',
-                 first.yr=2007)+ggtitle('Currently used in SS')+
-    theme(plot.title = element_text(size =14))
+                 Metric='Currently used in SS',
+                 first.yr=2007)+
+          theme(plot.title = element_text(size =14))
   
   p4=fn.rate.inc(d=Nom.dummy.w$`Sandbar shark`%>%
                    filter(method=='Mean'),
                  max.yr=2021,
-                 Metric='Weight, fixed stations',
-                 first.yr=2007)+ggtitle('Non stand - Mean')+
-    theme(plot.title = element_text(size =14))
+                 Metric='Non stand - Mean',
+                 first.yr=2007)+
+          theme(plot.title = element_text(size =14))
   
   p5=fn.rate.inc(d=Nom.dummy.w$`Sandbar shark`%>%
                    filter(method=='Nominal'),
                  max.yr=2021,
-                 Metric='Weight, fixed stations',
-                 first.yr=2007)+ggtitle('Non stand - Nominal')+
-    theme(plot.title = element_text(size =14))
+                 Metric='Non stand - Nominal',
+                 first.yr=2007)+
+            theme(plot.title = element_text(size =14))
   
   p6=fn.rate.inc(d=Nom.dummy.w$`Sandbar shark`%>%
                    filter(method=='DLnMean'),
                  max.yr=2021,
-                 Metric='Weight, fixed stations',
-                 first.yr=2007)+ggtitle('Non stand - DLnMean')+
-    theme(plot.title = element_text(size =14))
+                 Metric='Non stand - DLnMean',
+                 first.yr=2007)+
+          theme(plot.title = element_text(size =14))
   
   ggarrange(p1,p2,p3,p4,p5,p6,ncol=2,nrow=3) 
   
