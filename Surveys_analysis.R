@@ -866,7 +866,10 @@ NO.Fix.ST=subset(Shots.loc,FixedStation=="NO",select=c("SHEET_NO","FixedStation"
 NO.Fix.ST$Station.no.=NA
 NO.Fix.ST=NO.Fix.ST[!duplicated(NO.Fix.ST$SHEET_NO),]
 NO.Fix.ST=subset(NO.Fix.ST,!(SHEET_NO%in%Yes.Fix.ST$SHEET_NO))
-Yes.No.Fix.ST=rbind(Yes.Fix.ST,NO.Fix.ST)
+Yes.No.Fix.ST=rbind(Yes.Fix.ST,NO.Fix.ST)%>%
+  mutate(Station.no.=ifelse(grepl('additional',Station.no.),'additional',
+                            Station.no.),
+         Station.no.=ifelse(is.na(Station.no.),'additional',Station.no.))
 
 DATA=merge(DATA,Yes.No.Fix.ST,by="SHEET_NO",all.x=T)
 
@@ -876,9 +879,6 @@ UniC=DATA[!duplicated(DATA$SHEET_NO),]
 Fixed.only=subset(UniC,FixedStation=="YES")
 Fixed.only=unique(Fixed.only$date)
 DATA$FixedStation=with(DATA,ifelse(date%in%Fixed.only,"YES",FixedStation))
-
-#Set "additional station" to 'not fixed' station as they were only revisited a few years or none at all    
-DATA$FixedStation=with(DATA,ifelse(!Station.no.%in%as.character(1:20),"NO",FixedStation))
 
 
 #see what records were set to fixed stations
