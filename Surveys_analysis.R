@@ -13,20 +13,23 @@
 # -- REPORT SECTION --
 
 
-#NOTES:   shot is defined by SHEET_NO
-#         Periods: prior to 2001, drumlines; 2001 onwards, longlines
-#         fixed stations: 2001:2008, 2015: onwards
+#NOTES:   
+#         For each new year, use Comments to manually remove lost hooks and add lost fish. See
+#           'Manually add lost species and subtract lost hooks' in 'Source_Shark_bio.R' 
+#         Shot is defined by SHEET_NO   
 #         Station Definition within 10 nm
 #         Timeline: 
-#             First period: targeted at sandbar sharks for tagging
-#             Then WAMSI objectivies
-#             Then FRDC tagging of dusky sharks
-#             Then standard survey
-#         Zero inflated and Hurdle model don't produce SE for predictions,
-#         hence, did Monte Carlo or bootstrapping
+#             . First period: targeted at sandbar sharks for tagging
+#             . Then WAMSI objectives
+#             . Then FRDC tagging of dusky sharks
+#             . Then standard survey
+#         Periods: prior to 2001, drumlines; 2001 onwards, longlines
+#         fixed stations: 2001:2008, 2015: onwards
 
-#         For each new year, in 'Source_Shark_bio.R' ('Manually add lost species and subtract lost hooks'), manually subtract 
-#             lost hooks and add lost fish
+#         Models:
+#             Superseded. Zero inflated and Hurdle model don't produce SE for predictions,hence, use Monte Carlo/bootstrapping
+#             Superseded. GAM Tweedie with weight as reponse variable
+#             Current. SDMTMB with spatial covariance to use all data and account for autocorrelation (Ainslie's advise)
 
 # DATA SECTION ------------------------------------------------------------
 
@@ -76,6 +79,9 @@ library(imputeTS)
 library(ggrepel)
 library(ggpubr)
 library(ggpmisc)
+library(sdmTMB)
+library(sf)
+library(concaveman)
 
 #install.packages("countreg", repos = "http://R-Forge.R-project.org")
 #see great vignette: https://cran.r-project.org/web/packages/pscl/vignettes/countreg.pdf
@@ -147,9 +153,17 @@ bySEX="YES"  #control if size frequency separated by sex or not
 
 #control if doing abundance analysis
 Do.abundance="YES"
-do.GAM="YES"  #define if using GAM or GLM approach
+Grouping.VAR='SHEET_NO'    #use 'SHEET_NO' and account for autocorrelation; set to 'date' to group all shots per station (superseded)
+MAX.soak=20                #constrain cpue stand to given soak time, latitudes and hooks
+MIN.lat=-26
+MAX.hooks=100
+MAX.depth=250
+do.numbers=FALSE  #decide if running standardisation for numbers as res var
+do.sdmTMB='YES'  # use latent spatial random field to capture autocorrelation in the response
+do.GAM="NO"      #define if using GAM or GLM approach
 do.GLM="NO"
 stand.for.yr.only=TRUE  #set to FALSE if also want to show effects of other terms (paper only)
+Replace.cal.year.for.finyear=FALSE #No, If grouping by financial year, this would see surveys undertaken 200+ days apart grouped together 
 First.LL.yr=2001
 These.Months=5:8
 explore.cpue="NO"
@@ -1225,13 +1239,18 @@ if(Do.abundance=="YES")
               "N.hooks.Fixed","SOAK.TIME","Method","FixedStation","Station.no.")
   
   #1.6    Construct wide database for analysis   
-  Effort.data.fun=function(target,SUBSET,grouping.var='date',calc.other.sp=FALSE)
+  Effort.data.fun=function(target,SUBSET,grouping.var,calc.other.sp=FALSE,Max.depth=MAX.depth,
+                           max.soak=MAX.soak,min.lat=MIN.lat,max.hooks=MAX.hooks)
   {
     #remove record if no effort data or outside distribution
     if(SUBSET=="NO")DAT=subset(DATA,N.hooks.Fixed>Min.n.hooks.survey)
     if(SUBSET=="YES")DAT=subset(DATA,N.hooks.Fixed>Min.n.hooks.survey & BOTDEPTH <MaxDepth &
                                   Month%in%These.Months & Set.time <"08:00" & !(year==2004)) #2004 longline set mostly in the arvo 
     DAT=subset(DAT,!is.na(SPECIES))
+    
+    DAT = DAT %>%
+      filter(BOTDEPTH<Max.depth, Mid.Lat>min.lat, SOAK.TIME<MAX.soak, N.hooks.Fixed<max.hooks)
+    
     
     DAT=subset(DAT,year>2001)  #only 1 shot done during May:August in 2001
     
@@ -1324,7 +1343,7 @@ if(Do.abundance=="YES")
   }
   for ( i in 1:N.species)
   {
-    dum=Effort.data.fun(target=TARGETS[i],SUBSET="NO")
+    dum=Effort.data.fun(target=TARGETS[i],SUBSET="NO",grouping.var=Grouping.VAR)  
     DATA.list[[i]]=dum$dat
     DATA.list.w[[i]]=dum$dat.w
     Prop.Ktch.list[[i]]=dum$prop.ktch
@@ -1468,7 +1487,7 @@ if(Do.abundance=="YES")
     #note: SUBSET="YES" chooses stations done same time of year, etc
   for ( i in 1:N.species)
   {
-    dum=Effort.data.fun(TARGETS[i],SUBSET="YES")   
+    dum=Effort.data.fun(TARGETS[i],SUBSET="YES",grouping.var=Grouping.VAR)   
     DATA.list[[i]]=dum$dat
     DATA.list.w[[i]]=dum$dat.w
     Prop.Ktch.list[[i]]=dum$prop.ktch
@@ -1526,7 +1545,7 @@ if(Do.abundance=="YES")
 
   }
     
-  #Calculate rate of increase for sandbar shark
+  #Calculate rate of increase for sandbar shark  
   fn.rate.inc=function(d,max.yr,Metric,first.yr)
   {
     first.val=d%>%filter(season==first.yr)%>%pull(mean)
@@ -1574,8 +1593,7 @@ if(Do.abundance=="YES")
   
   
   
-  #1.11   ---- Standardised cpue ----#
-  do.numbers=FALSE  #decide if running standardisation for numbers as res var
+  #1.11   ---- Standardised cpue ----#  
   cfac=function(x,breaks=NULL)
   {
     x=round(x,2)  
@@ -3503,7 +3521,7 @@ if(Do.abundance=="YES")
     ERROR.st$"Spot-tail shark"=ERROR.st$"Scalloped hammerhead"=ERROR.st$"Sliteye shark"="ZIP"
   }
   
-  if(stand.for.yr.only)
+  if(stand.for.yr.only)  
   {
     for(i in Species.cpue)
     {
@@ -3512,735 +3530,904 @@ if(Do.abundance=="YES")
     }
   }
   
-  #replace calendar year for financial year
-  for(i in Species.cpue)
+  #replace calendar year for financial year? 
+  if(Replace.cal.year.for.finyear)
   {
-    DATA.list[[i]]=DATA.list[[i]]%>%
-                      mutate(year.calendar=year,
-                             year=as.numeric(substr(finyear,1,4)))
-    DATA.list.w[[i]]=DATA.list.w[[i]]%>%
-                      mutate(year.calendar=year,
-                             year=as.numeric(substr(finyear,1,4)))
-                    
-    #BEST.model[[i]]=pryr::substitute_q(BEST.model[[i]], list(year = as.name('finyear')))
-    #BEST.model.w[[i]]=pryr::substitute_q(BEST.model.w[[i]], list(year = as.name('finyear')))
-  }
-
-  fit.best=function(d,FORMULA,ErroR)
-  {
-    if(do.GAM=="YES")
+    for(i in Species.cpue)
     {
-      #Fit model
-      if(ErroR=="Pois") Fit=gam(FORMULA,data=d,method = "REML",family=poisson)
-      if(ErroR=="NB")  Fit=gam(FORMULA, data=d,method = "REML",family = nb)
-      if(ErroR=="ZIP") Fit=zipgam(lambda.formula=FORMULA,pi.formula=FORMULA,data=d)
-      if(ErroR=="ZINB") Fit=zinbgam(mu.formula=FORMULA,pi.formula=FORMULA, data=d)
-      if(ErroR=="Tweedie")
-      {
-        if(any(grepl("k = ", attr(terms(FORMULA),'term.labels'))))
-        {
-          Fit=bam(FORMULA,data=d,family='tw',method="fREML",discrete=TRUE)
-        }else
-        {
-          Fit=gam(FORMULA,data=d,family='tw',method="REML")  
-        }
-      }
-
-      #Predictions
-      if(any(grepl('offset',FORMULA)))
-      {
-        year.pred=summary(emmeans(Fit,"year", type="response", offset = log(d$effort), data = d))
-        
-        Lat.pred=NULL
-        used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
-        if(sum(used.term)>0)
-        {
-          Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
-          Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.5)),
-                                   offset = log(d$effort), data = d))
-        }
-        
-        Depth.pred=NULL
-        used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
-        if(sum(used.term)>0)
-        {
-          ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
-          Depth.pred=summary(emmeans(Fit,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10)),
-                                     offset = log(d$effort), data = d))
-        }
-        
-      }else
-      {
-        year.pred=summary(emmeans(Fit,"year", type="response"))
-        
-        Lat.pred=NULL
-        Depth.pred=NULL
-        if(!stand.for.yr.only)
-        {
-          used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
-          if(sum(used.term)>0)
-          {
-            Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
-            Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.5))))
-          }
-          
-          used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
-          if(sum(used.term)>0)
-          {
-            ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
-            Depth.pred=summary(emmeans(Fit,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10))))
-          }
-        }
-      }
-
+      DATA.list[[i]]=DATA.list[[i]]%>%
+        mutate(year.calendar=year,
+               year=as.numeric(substr(finyear,1,4)))
+      DATA.list.w[[i]]=DATA.list.w[[i]]%>%
+        mutate(year.calendar=year,
+               year=as.numeric(substr(finyear,1,4)))
+      
+      #BEST.model[[i]]=pryr::substitute_q(BEST.model[[i]], list(year = as.name('finyear')))
+      #BEST.model.w[[i]]=pryr::substitute_q(BEST.model.w[[i]], list(year = as.name('finyear')))
     }
     
-    if(do.GLM=="YES")
-    {
-      if(ErroR=="Pois") Fit=Count.Pois.fn(DAT=d,FORMULA=FORMULA)
-      if(ErroR=="NB") Fit=Count.NB.fn(DAT=d,FORMULA=FORMULA)
-      if(ErroR=="ZIP") Fit=zeroinfl(FORMULA, data = d, dist = "poisson")
-      if(ErroR=="ZINB") Fit=zeroinfl(FORMULA, data = d, dist = "negbin")
-      if(ErroR=="HU.P") Fit=hurdle(FORMULA, data = d , dist="poisson")
-      if(ErroR=="HU.NB") Fit=hurdle(FORMULA, data = d , dist="negbin")
-      
-      #Predictions
-      year.pred=summary(emmeans(Fit,"year", type="response"))
-      
-      Lat.pred=NULL
-      Depth.pred=NULL
-      
-      if(!stand.for.yr.only)
-      {
-        used.term=grepl("log.Mid.Lat", attr(terms(FORMULA),'term.labels'))
-        if(sum(used.term)>0)
-        {
-          Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
-          Lat.pred=summary(emmeans(Fit,"log.Mid.Lat", type="response",at=list(log.Mid.Lat=log(seq(Lata[1],Lata[2],.1)))))
-        }
-        
-        used.term=grepl("log.BOTDEPTH", attr(terms(FORMULA),'term.labels'))
-        if(sum(used.term)>0)
-        {
-          ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
-          Depth.pred=summary(emmeans(Fit,"log.BOTDEPTH", type="response",at=list(log.BOTDEPTH=log(seq(ZZ[1],ZZ[2],10)))))
-        }
-      }
-    }
-    
-    #Null model
-    if(any(grepl('offset',FORMULA)))
-    {
-      Null=update(Fit,.~1)
-    }else
-    {
-      Null=gam(cpue ~ 1,data=d,family='tw',method="fREML")
-    }
-      
-    
-    return(list(Fit=Fit,DAT=d,Null=Null,year.pred=year.pred,
-                Lat.pred=Lat.pred,Depth.pred=Depth.pred))
   }
 
   Store=vector('list',N.species)   
   names(Store)=names(DATA.list)
   Store.n=Store
-  system.time(for(i in Species.cpue)     
+  
+  if(do.GAM=="YES" | do.GLM=='YES')
   {
-    print(paste('-------------Fitting models to ------',names(DATA.list.w)[i]))
-    #1. Numbers
-    if(do.numbers)
+    fit.best=function(d,FORMULA,ErroR)
     {
-      DAT=DATA.list[[i]]%>%
+      if(do.GAM=="YES")
+      {
+        #Fit model
+        if(ErroR=="Pois") Fit=gam(FORMULA,data=d,method = "REML",family=poisson)
+        if(ErroR=="NB")  Fit=gam(FORMULA, data=d,method = "REML",family = nb)
+        if(ErroR=="ZIP") Fit=zipgam(lambda.formula=FORMULA,pi.formula=FORMULA,data=d)
+        if(ErroR=="ZINB") Fit=zinbgam(mu.formula=FORMULA,pi.formula=FORMULA, data=d)
+        if(ErroR=="Tweedie")
+        {
+          if(any(grepl("k = ", attr(terms(FORMULA),'term.labels'))))
+          {
+            Fit=bam(FORMULA,data=d,family='tw',method="fREML",discrete=TRUE)
+          }else
+          {
+            Fit=gam(FORMULA,data=d,family='tw',method="REML")  
+          }
+        }
+        
+        #Predictions
+        if(any(grepl('offset',FORMULA)))
+        {
+          year.pred=summary(emmeans(Fit,"year", type="response", offset = log(d$effort), data = d))
+          
+          Lat.pred=NULL
+          used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
+          if(sum(used.term)>0)
+          {
+            Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
+            Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.5)),
+                                     offset = log(d$effort), data = d))
+          }
+          
+          Depth.pred=NULL
+          used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
+          if(sum(used.term)>0)
+          {
+            ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
+            Depth.pred=summary(emmeans(Fit,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10)),
+                                       offset = log(d$effort), data = d))
+          }
+          
+        }else
+        {
+          year.pred=summary(emmeans(Fit,"year", type="response"))
+          
+          Lat.pred=NULL
+          Depth.pred=NULL
+          if(!stand.for.yr.only)
+          {
+            used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
+            if(sum(used.term)>0)
+            {
+              Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
+              Lat.pred=summary(emmeans(Fit,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.5))))
+            }
+            
+            used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
+            if(sum(used.term)>0)
+            {
+              ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
+              Depth.pred=summary(emmeans(Fit,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10))))
+            }
+          }
+        }
+        
+      }
+      
+      if(do.GLM=="YES")
+      {
+        if(ErroR=="Pois") Fit=Count.Pois.fn(DAT=d,FORMULA=FORMULA)
+        if(ErroR=="NB") Fit=Count.NB.fn(DAT=d,FORMULA=FORMULA)
+        if(ErroR=="ZIP") Fit=zeroinfl(FORMULA, data = d, dist = "poisson")
+        if(ErroR=="ZINB") Fit=zeroinfl(FORMULA, data = d, dist = "negbin")
+        if(ErroR=="HU.P") Fit=hurdle(FORMULA, data = d , dist="poisson")
+        if(ErroR=="HU.NB") Fit=hurdle(FORMULA, data = d , dist="negbin")
+        
+        #Predictions
+        year.pred=summary(emmeans(Fit,"year", type="response"))
+        
+        Lat.pred=NULL
+        Depth.pred=NULL
+        
+        if(!stand.for.yr.only)
+        {
+          used.term=grepl("log.Mid.Lat", attr(terms(FORMULA),'term.labels'))
+          if(sum(used.term)>0)
+          {
+            Lata=with(subset(d,Catch.Target>0),range(abs(floor(d$Mid.Lat))))
+            Lat.pred=summary(emmeans(Fit,"log.Mid.Lat", type="response",at=list(log.Mid.Lat=log(seq(Lata[1],Lata[2],.1)))))
+          }
+          
+          used.term=grepl("log.BOTDEPTH", attr(terms(FORMULA),'term.labels'))
+          if(sum(used.term)>0)
+          {
+            ZZ=with(subset(d,Catch.Target>0),range(10*floor(BOTDEPTH/10)))
+            Depth.pred=summary(emmeans(Fit,"log.BOTDEPTH", type="response",at=list(log.BOTDEPTH=log(seq(ZZ[1],ZZ[2],10)))))
+          }
+        }
+      }
+      
+      #Null model
+      if(any(grepl('offset',FORMULA)))
+      {
+        Null=update(Fit,.~1)
+      }else
+      {
+        Null=gam(cpue ~ 1,data=d,family='tw',method="fREML")
+      }
+      
+      
+      return(list(Fit=Fit,DAT=d,Null=Null,year.pred=year.pred,
+                  Lat.pred=Lat.pred,Depth.pred=Depth.pred))
+    }
+    system.time(for(i in Species.cpue)     
+    {
+      print(paste('-------------Fitting models to ------',names(DATA.list.w)[i]))
+      #1. Numbers
+      if(do.numbers)
+      {
+        DAT=DATA.list[[i]]%>%
+          filter(BOTDEPTH<210)
+        if(use.only.fixed.stations) DAT=DAT%>%filter(FixedStation=="YES")
+        TT=with(subset(DAT,Catch.Target>0),table(year))
+        d=DAT%>%
+          filter(year%in%names(TT[TT>0])) %>%
+          mutate(Mid.Lat=abs(Mid.Lat),
+                 effort=SOAK.TIME*N.hooks.Fixed,
+                 cpue=Catch.Target/effort)%>%
+          filter(!is.na(effort))%>%
+          mutate(log.Ef=log(effort),
+                 year=factor(year,levels=unique(sort(year))),
+                 finyear=factor(finyear,levels=unique(sort(finyear))),
+                 Month=factor(Month,levels=unique(sort(Month))),
+                 Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
+        #run model
+        Store.n[[i]]=fit.best(d=d,FORMULA=BEST.model[[i]],ErroR=ERROR.st[[i]])
+        
+      }
+      
+      #2. Weight  
+      DAT=DATA.list.w[[i]]%>%
         filter(BOTDEPTH<210)
       if(use.only.fixed.stations) DAT=DAT%>%filter(FixedStation=="YES")
-      TT=with(subset(DAT,Catch.Target>0),table(year))
       d=DAT%>%
-        filter(year%in%names(TT[TT>0])) %>%
         mutate(Mid.Lat=abs(Mid.Lat),
                effort=SOAK.TIME*N.hooks.Fixed,
                cpue=Catch.Target/effort)%>%
-        filter(!is.na(effort))%>%
+        filter(!is.na(effort))
+      zero.catch.yr=d%>%group_by(year)%>%summarise(mean=mean(cpue))%>%filter(mean==0)%>%pull(year)
+      if(length(zero.catch.yr)>0) d=d%>%filter(!year%in%zero.catch.yr)
+      d=d%>%
         mutate(log.Ef=log(effort),
                year=factor(year,levels=unique(sort(year))),
                finyear=factor(finyear,levels=unique(sort(finyear))),
                Month=factor(Month,levels=unique(sort(Month))),
                Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
+      #explore terms
+      if(explore.cpue=="YES")
+      {
+        p1=d%>%ggplot(aes(year,cpue))+geom_boxplot()+theme_PA()+
+          geom_smooth(aes(group = 1))+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+        p2=d%>%ggplot(aes(finyear,cpue))+geom_boxplot()+theme_PA()+
+          geom_smooth(aes(group = 1))+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+        p3=d%>%ggplot(aes(Month,cpue))+geom_boxplot()+theme_PA()
+        p4=d%>%ggplot(aes(Moon,cpue))+geom_boxplot()+theme_PA()
+        p5=d%>%mutate(BOTDEPTH=factor(10*floor(BOTDEPTH/10)))%>%ggplot(aes(BOTDEPTH,cpue))+
+          geom_boxplot()+theme_PA()+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+        p6=d%>%mutate(Mid.Lat=factor(0.5*floor(Mid.Lat/0.5)))%>%ggplot(aes(Mid.Lat,cpue))+
+          geom_boxplot()+theme_PA()+geom_smooth(aes(group = 1))+
+          theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+        ggarrange(p1,p2,p3,p4,p5,p6,nrow=3,ncol=2)
+        ggsave(paste0(hndl.expl,"/Explore GAM inputs/",names(Store)[i],".tiff"),
+               width = 8,height = 8,compression = "lzw")
+      }
       #run model
-      Store.n[[i]]=fit.best(d=d,FORMULA=BEST.model[[i]],ErroR=ERROR.st[[i]])
+      Store[[i]]=fit.best(d=d,FORMULA=BEST.model.w[[i]],ErroR='Tweedie')  
       
-    }
-        
-    #2. Weight  
-    DAT=DATA.list.w[[i]]%>%
-      filter(BOTDEPTH<210)
-    if(use.only.fixed.stations) DAT=DAT%>%filter(FixedStation=="YES")
-    d=DAT%>%
-      mutate(Mid.Lat=abs(Mid.Lat),
-             effort=SOAK.TIME*N.hooks.Fixed,
-             cpue=Catch.Target/effort)%>%
-      filter(!is.na(effort))
-    zero.catch.yr=d%>%group_by(year)%>%summarise(mean=mean(cpue))%>%filter(mean==0)%>%pull(year)
-    if(length(zero.catch.yr)>0) d=d%>%filter(!year%in%zero.catch.yr)
-    d=d%>%
-      mutate(log.Ef=log(effort),
-             year=factor(year,levels=unique(sort(year))),
-             finyear=factor(finyear,levels=unique(sort(finyear))),
-             Month=factor(Month,levels=unique(sort(Month))),
-             Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
-    #explore terms
-    if(explore.cpue=="YES")
+      if(exists('TT')) rm(TT)
+      rm(DAT,d)
+    }) 
+  }
+
+  if(do.sdmTMB=="YES")  
+  {
+    fit.best=function(d,FORMULA,MESH,Grid_pred)
     {
-      p1=d%>%ggplot(aes(year,cpue))+geom_boxplot()+theme_PA()+
-        geom_smooth(aes(group = 1))+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
-      p2=d%>%ggplot(aes(finyear,cpue))+geom_boxplot()+theme_PA()+
-        geom_smooth(aes(group = 1))+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
-      p3=d%>%ggplot(aes(Month,cpue))+geom_boxplot()+theme_PA()
-      p4=d%>%ggplot(aes(Moon,cpue))+geom_boxplot()+theme_PA()
-      p5=d%>%mutate(BOTDEPTH=factor(10*floor(BOTDEPTH/10)))%>%ggplot(aes(BOTDEPTH,cpue))+
-        geom_boxplot()+theme_PA()+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
-      p6=d%>%mutate(Mid.Lat=factor(0.5*floor(Mid.Lat/0.5)))%>%ggplot(aes(Mid.Lat,cpue))+
-        geom_boxplot()+theme_PA()+geom_smooth(aes(group = 1))+
-        theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
-      ggarrange(p1,p2,p3,p4,p5,p6,nrow=3,ncol=2)
-      ggsave(paste0(hndl.expl,"/Explore GAM inputs/",names(Store)[i],".tiff"),
-             width = 8,height = 8,compression = "lzw")
+      #Fit model
+      Fit = sdmTMB(formula = FORMULA, data = d, mesh = MESH, family = tweedie(link = "log"),
+                   spatial = "on", spatiotemporal = "off")
+      #Predict year
+      Grid_pred$year = NULL
+      Grid_pred$BOTDEPTH = NULL
+      Grid_pred$Moon = NULL
+      year_levels = levels(d$year)
+      pred_list3 = lapply(year_levels, function(yr)
+      {
+        Grid_pred$year = factor(yr, levels = year_levels)
+        Grid_pred$BOTDEPTH = mean(d$BOTDEPTH)
+        Grid_pred = Grid_pred %>%
+          cross_join(data.frame(Moon = factor(levels(d$Moon), levels=levels(d$Moon))))
+        
+        # e.g. 250 draws from joint precision matrix
+        pred_sims = predict(Fit, newdata = Grid_pred, type = "link", nsim = 250)
+        # summarise across simulations
+        pred_mean = apply(pred_sims, 1, mean)
+        pred_sd   = apply(pred_sims, 1, sd)
+        
+        data.frame(year = yr,
+                   lon = Grid_pred$lon,
+                   lat = Grid_pred$lat,
+                   BOTDEPTH = Grid_pred$BOTDEPTH,
+                   Moon = Grid_pred$Moon,
+                   fit = pred_mean,
+                   se.fit = pred_sd)
+      })
+      pred_df3 = bind_rows(pred_list3)
+      row.names(pred_df3) = NULL
+      
+      # draw spatial surface (by year)
+      p_spatial.surface=ggplot(pred_df3, aes(lon, lat, fill=fit)) +
+        geom_raster() +
+        scale_fill_viridis_c() +
+        coord_equal() +
+        theme_bw() +
+        facet_wrap(~year)
+      
+      ## year average across spatial grid (and moon phases)
+      allyears=unique(as.numeric(as.character(d$year)))
+      allyears = min(allyears):max(allyears)
+      year.pred = pred_df3 %>%
+        group_by(year) %>%
+        summarise(fit_avg = mean(fit),
+                  se_avg = sqrt(sum(se.fit^2)/n()),
+                  .groups = "drop") %>%
+        mutate(lower = fit_avg - 1.96 * se_avg,
+               upper = fit_avg + 1.96 * se_avg,
+               response = exp(fit_avg),      
+               lower.CL = exp(lower),
+               upper.CL = exp(upper)) %>%
+        as.data.frame%>%
+        mutate(year=as.numeric(as.character(year)))%>%
+        full_join(expand.grid(year=allyears), by = join_by(year))%>%
+        arrange(year)
+      
+      p_year=year.pred%>%
+        ggplot(aes(year, response, ymin=lower.CL, ymax=upper.CL)) +
+        geom_point(size=3,position=position_dodge(width=0.6)) +
+        geom_line(position=position_dodge(width=0.6), lty=2) +
+        geom_errorbar(position=position_dodge(width=0.6), width=0) +
+        coord_cartesian(ylim=c(0, NA)) +
+        labs(x="Year", y="Marginal Mean", title="sdmTMB") +
+        theme_bw()
+      
+      
+      return(list(Fit=Fit,DAT=d,year.pred=year.pred,
+                  p_spatial.surface=p_spatial.surface,p_year=p_year))
     }
-      #run model
-    Store[[i]]=fit.best(d=d,FORMULA=BEST.model.w[[i]],ErroR='Tweedie')  
     
-    if(exists('TT')) rm(TT)
-    rm(DAT,d)
-  }) 
+    system.time(for(i in Species.cpue)     #takes 35 secs per species
+    {
+      print(paste('-------------Fitting models to ------',names(DATA.list.w)[i]))
+      
+      #Weight  
+      d=DATA.list.w[[i]]%>%
+        rename(lat=Mid.Lat,
+               lon=Mid.Long)%>%
+        mutate(effort=SOAK.TIME*N.hooks.Fixed,
+               cpue=Catch.Target/effort)%>%
+        filter(!is.na(effort))
+      zero.catch.yr=d%>%group_by(year)%>%summarise(mean=mean(cpue))%>%filter(mean==0)%>%pull(year)
+      if(length(zero.catch.yr)>0) d=d%>%filter(!year%in%zero.catch.yr)
+      d=d%>%
+        mutate(log.Ef=log(effort),
+               year=factor(year,levels=unique(sort(year))),
+               Month=factor(Month,levels=unique(sort(Month))),
+               Moon=factor(Moon,levels=c("Full","Waning","New","Waxing")))
+      
+      #create spatial mesh 
+      mesh = make_mesh(d, xy_cols = c("lon", "lat"), type = "kmeans", n_knots = 200)
+      
+      #create prediction grid
+      pts_sf = st_as_sf(d, coords = c("lon", "lat"), crs = 4326)
+      poly_hull = st_convex_hull(st_union(pts_sf))
+      hull_buffered = st_buffer(poly_hull, 100)
+      poly_concave = concaveman(pts_sf)
+      concave_buffered = st_buffer(poly_concave, 40000)
+      grid_lon = seq(min(d$lon)-1, max(d$lon)+1, length.out = 100)
+      grid_lat = seq(min(d$lat)-1, max(d$lat)+1, length.out = 100)
+      grid = expand.grid(lon = grid_lon, lat = grid_lat) %>%
+        st_as_sf(coords = c("lon", "lat"), crs = 4326)
+      #jeep only grid points inside polygon
+      grid_inside = grid[concave_buffered, ]
+      grid_df = grid_inside %>%
+        st_coordinates() %>%
+        as.data.frame() %>%
+        rename(lon=X, lat=Y) %>%
+        as.data.frame()
+      
+      #explore stuff
+      if(explore.cpue=="YES")
+      {
+        #Plot mesh
+        plot(mesh)
+        dev.print(device = png,
+                  filename = paste0(hndLs,"/sdmTMB/mesh_",names(DATA.list.w)[i],".png"),
+                  pointsize = 12, width=210, height=170,
+                  units="mm", res=600)
+        
+        #plot spatial grid for predictions
+        plot(hull_buffered, col=NA, border="red")
+        plot(concave_buffered, col=NA, border="cyan", add=TRUE)
+        plot(st_geometry(pts_sf), add=TRUE, pch=19, col="blue")
+        dev.print(device = png,
+                  filename = paste0(hndLs,"/sdmTMB/spatial grid_",names(DATA.list.w)[i],".png"),
+                  pointsize = 12, width=210, height=170,
+                  units="mm", res=600)
+      }
+      
+      #run model
+      Store[[i]]=fit.best(d=d,FORMULA=formula(cpue ~ year),MESH=mesh,Grid_pred=grid_df) 
+
+      #plot stuff
+      print(Store[[i]]$p_spatial.surface)  
+      dev.print(device = png,
+                filename = paste0(hndLs,"/sdmTMB/spatial.surface_",names(DATA.list.w)[i],".png"),
+                pointsize = 12, width=210, height=170,
+                units="mm", res=600)
+      
+      print(Store[[i]]$p_year)
+      dev.print(device = png,
+                filename = paste0(hndLs,"/sdmTMB/year_",names(DATA.list.w)[i],".png"),
+                pointsize = 12, width=210, height=170,
+                units="mm", res=600)
+      
+      
+      rm(d)
+    }) 
+  }
+  
   Store.out.dis.size=Store
 
-  #Is there a non-linear relation in residuals that requires GAM?    NOT applicable anymore as I am already using GAMs....
-  #note: if Pearson residuals vs the covariate shows a clear pattern 
-  #       (i.e. Significant Anova), then GAM is needed (i.e. covariates
-  #       must be modelled thru a polynomial as it is not linearly related
-  #       to the response variable)
-  if(check.GAM=="YES")
-  {
-    fn.need.Gam=function(MOD,DAT,VAR,Var.name)
-    {
-      E1=resid(MOD,type='pearson')
-      plot(VAR,E1,ylab='',xlab=Var.name)
-      lo <- loess(E1~VAR)
-      lines(predict(lo), col='red', lwd=2)
-      
-      tmp=gam(E1~s(VAR),data=DAT)
-      return(anova(tmp))
-    }
-    
-    #note: if anova is Significant, then there's a pattern in residuals (ie non-linear relation
-    #       between covariate and response var)
-    fn.fig(paste(hndl.expl,"/Need_gam_plot",sep=""),2400,1200)
-    par(mfcol=c(2,length(Species.cpue)),las=1,mar=c(2.5,.5,.5,.75),oma=c(1,2.25,1,.1),mgp=c(1.5,0.6,0))
-    STORE.GAM=vector('list',N.species)
-    names(STORE.GAM)=names(Store)
-    for(i in Species.cpue)
-    {
-      MoD=Store[[i]]$Fit
-      DAt=Store[[i]]$DAT
-      ths=c("BOTDEPTH","Mid.Lat")
-      id=match(ths,names(DAt))
-      Store.Gam=vector('list',length(ths))
-      names(Store.Gam)=ths
-      for(x in 1:length(id))
-      {
-        Store.Gam[[x]]=fn.need.Gam(MoD,DAt,DAt[,id[x]],ths[x])
-        if(x==1)mtext(names(Store)[i],3,line=0,cex=.65)
-        legend('topright',paste("F=",round(Store.Gam[[x]]$s.table[,3],2),
-                                "; p-value=",round(Store.Gam[[x]]$s.table[,4],2)),bty='n',cex=.65)
-      }
-      STORE.GAM[[i]]=Store.Gam
-    }
-    mtext("Pearson residuals",2,outer=T,las=3,line=0.5,cex=1.25)
-    dev.off()
-    
-    #1.11.14. Fitting GAM and ZIGAM
-    # 
-    #   #Formulas
-    #   
-    #   #Count model
-    #   pois.GAM=gam(Catch.Target ~ year s(BOTDEPTH)+ offset(log.Effort), family = poisson, data=DAT)
-    #   NB.GAM=gam(Catch.Target ~ year s(BOTDEPTH)+ offset(log.Effort), family = negbin(NB$theta), data=DAT)
-    #   
-    #   #Zero inflated (see page 84-86 Zuur, how to get deviance)
-    #   library(VGAM) 
-    #   detach("package:mgcv")
-    #   ZI.pois.GAM=vgam(Catch.Target ~ year +s(BOTDEPTH)+ offset(log.Effort), family = zipoisson, data=DAT)
-    #   ZI.NB.GAM=vgam(Catch.Target ~ year +s(BOTDEPTH)+ offset(log.Effort), family = zinegbinomial, data=DAT,
-    #                  control=vgam.control(maxit=100,epsilon=1e-4))
-    
-  }
   
-  ##compare fitted model to null model to test if it's an improvement
-   Ch.sq=ERROR.st
-   for(i in Species.cpue) Ch.sq[[i]]=pchisq(2 * (logLik(Store[[i]]$Fit) - logLik(Store[[i]]$Null)), df = 3, lower.tail = FALSE)
-
+  ##compare fitted model to null model & get predictions
+  if(do.GAM=="YES" | do.GLM=='YES')
+  {
+    #Is there a non-linear relation in residuals that requires GAM?    NOT applicable anymore as I am already using GAMs....
+    #note: if Pearson residuals vs the covariate shows a clear pattern 
+    #       (i.e. Significant Anova), then GAM is needed (i.e. covariates
+    #       must be modelled thru a polynomial as it is not linearly related
+    #       to the response variable)
+    if(check.GAM=="YES")
+    {
+      fn.need.Gam=function(MOD,DAT,VAR,Var.name)
+      {
+        E1=resid(MOD,type='pearson')
+        plot(VAR,E1,ylab='',xlab=Var.name)
+        lo <- loess(E1~VAR)
+        lines(predict(lo), col='red', lwd=2)
+        
+        tmp=gam(E1~s(VAR),data=DAT)
+        return(anova(tmp))
+      }
+      
+      #note: if anova is Significant, then there's a pattern in residuals (ie non-linear relation
+      #       between covariate and response var)
+      fn.fig(paste(hndl.expl,"/Need_gam_plot",sep=""),2400,1200)
+      par(mfcol=c(2,length(Species.cpue)),las=1,mar=c(2.5,.5,.5,.75),oma=c(1,2.25,1,.1),mgp=c(1.5,0.6,0))
+      STORE.GAM=vector('list',N.species)
+      names(STORE.GAM)=names(Store)
+      for(i in Species.cpue)
+      {
+        MoD=Store[[i]]$Fit
+        DAt=Store[[i]]$DAT
+        ths=c("BOTDEPTH","Mid.Lat")
+        id=match(ths,names(DAt))
+        Store.Gam=vector('list',length(ths))
+        names(Store.Gam)=ths
+        for(x in 1:length(id))
+        {
+          Store.Gam[[x]]=fn.need.Gam(MoD,DAt,DAt[,id[x]],ths[x])
+          if(x==1)mtext(names(Store)[i],3,line=0,cex=.65)
+          legend('topright',paste("F=",round(Store.Gam[[x]]$s.table[,3],2),
+                                  "; p-value=",round(Store.Gam[[x]]$s.table[,4],2)),bty='n',cex=.65)
+        }
+        STORE.GAM[[i]]=Store.Gam
+      }
+      mtext("Pearson residuals",2,outer=T,las=3,line=0.5,cex=1.25)
+      dev.off()
+      
+      #1.11.14. Fitting GAM and ZIGAM
+      # 
+      #   #Formulas
+      #   
+      #   #Count model
+      #   pois.GAM=gam(Catch.Target ~ year s(BOTDEPTH)+ offset(log.Effort), family = poisson, data=DAT)
+      #   NB.GAM=gam(Catch.Target ~ year s(BOTDEPTH)+ offset(log.Effort), family = negbin(NB$theta), data=DAT)
+      #   
+      #   #Zero inflated (see page 84-86 Zuur, how to get deviance)
+      #   library(VGAM) 
+      #   detach("package:mgcv")
+      #   ZI.pois.GAM=vgam(Catch.Target ~ year +s(BOTDEPTH)+ offset(log.Effort), family = zipoisson, data=DAT)
+      #   ZI.NB.GAM=vgam(Catch.Target ~ year +s(BOTDEPTH)+ offset(log.Effort), family = zinegbinomial, data=DAT,
+      #                  control=vgam.control(maxit=100,epsilon=1e-4))
+      
+    }
+    
+    Ch.sq=ERROR.st
+    for(i in Species.cpue) Ch.sq[[i]]=pchisq(2 * (logLik(Store[[i]]$Fit) - logLik(Store[[i]]$Null)), df = 3, lower.tail = FALSE)
+    
     #rootgram  
-   if(do.numbers)
-   {
-     fn.fig(paste(getwd(),"/Model selection/rootgram_abundance",sep=""),2000,2400)
-     smart.par(n.plots=length(Species.cpue),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
-     for(i in Species.cpue) rootogram(Store[[i]]$Fit, main = TARGETS.name[i])
-     dev.off()
-   }
-   
-     #Anova tables    
-  Anova.tab=function(mod,Fcol)  
-  {
-    ANVA=anova.gam(mod)
-    Param=ANVA$pTerms.table
-    Non.param=ANVA$s.table
-    Tab=rbind(Param[,match(c(Fcol,"p-value"),colnames(Param))],
-              Non.param[,match(c(Fcol,"p-value"),colnames(Non.param))])
-    row.names(Tab)=NULL
-    Tab=cbind(data.frame(Term=tolower(c(row.names(Param), row.names(Non.param)))),
-              as.data.frame(Tab))
-    Tab=Tab%>%rename(p=`p-value`)%>%mutate(p=ifelse(p<0.001,"<0.001",round(p,3)))
-    id=match(Fcol,names(Tab))
-    Tab[,id]=round(Tab[,id],3)
-    dummy=Tab[1,]
-    dummy[,]=""
-    SP=dummy
-    SP$Term=TARGETS.name[i]
-    Dev.Exp=dummy
-    Dev.Exp$Term="Dev.exp"
-    Dev.Exp[,id]=paste(round(ANVA$dev.expl,2)*100,"%",sep="")
-    Tab=rbind(SP,Tab,Dev.Exp)
-    Tab$Term[which(grepl("mid.lat",Tab$Term))]="latitude"
-    Tab$Term[which(grepl("botdepth",Tab$Term))]="bottom depth"
-    Tab$Term[which(grepl("Dev.exp",Tab$Term))]="Deviance explained"
-    Tab$Join=with(Tab,paste(TARGETS.name[i],Tab$Term,sep="_"))
-
-    return(Tab)
-  }
-  
+    if(do.numbers)
+    {
+      fn.fig(paste(getwd(),"/Model selection/rootgram_abundance",sep=""),2000,2400)
+      smart.par(n.plots=length(Species.cpue),MAR=c(2,2,1,1),OMA=c(1,1.5,.1,.1),MGP=c(2.5,.7,0))
+      for(i in Species.cpue) rootogram(Store[[i]]$Fit, main = TARGETS.name[i])
+      dev.off()
+    }
+    
+    #Anova tables    
+    Anova.tab=function(mod,Fcol)  
+    {
+      ANVA=anova.gam(mod)
+      Param=ANVA$pTerms.table
+      Non.param=ANVA$s.table
+      Tab=rbind(Param[,match(c(Fcol,"p-value"),colnames(Param))],
+                Non.param[,match(c(Fcol,"p-value"),colnames(Non.param))])
+      row.names(Tab)=NULL
+      Tab=cbind(data.frame(Term=tolower(c(row.names(Param), row.names(Non.param)))),
+                as.data.frame(Tab))
+      Tab=Tab%>%rename(p=`p-value`)%>%mutate(p=ifelse(p<0.001,"<0.001",round(p,3)))
+      id=match(Fcol,names(Tab))
+      Tab[,id]=round(Tab[,id],3)
+      dummy=Tab[1,]
+      dummy[,]=""
+      SP=dummy
+      SP$Term=TARGETS.name[i]
+      Dev.Exp=dummy
+      Dev.Exp$Term="Dev.exp"
+      Dev.Exp[,id]=paste(round(ANVA$dev.expl,2)*100,"%",sep="")
+      Tab=rbind(SP,Tab,Dev.Exp)
+      Tab$Term[which(grepl("mid.lat",Tab$Term))]="latitude"
+      Tab$Term[which(grepl("botdepth",Tab$Term))]="bottom depth"
+      Tab$Term[which(grepl("Dev.exp",Tab$Term))]="Deviance explained"
+      Tab$Join=with(Tab,paste(TARGETS.name[i],Tab$Term,sep="_"))
+      
+      return(Tab)
+    }
+    
     #Get terms significance and coefficients 
-  if(do.numbers)
-  {
-    Sig.terms=vector('list',N.species)
-    names(Sig.terms)=TARGETS.name
-    Sig.term.coeff=Sig.terms
-    for (i in 1:N.species)
+    if(do.numbers)
     {
-      a=as.data.frame.matrix(coeftest(Store[[i]]$Fit))
-      write.csv(a,paste("Paper/Anovas/Anova.abundance_",names(Store)[i],".csv",sep=""),row.names=T)
-      
-      id=match('Pr(>|z|)',names(a))
-      if(length(id)>0) names(a)[id]='Pr(>|t|)'
-      
-      Sigi=rownames(a[which(a$`Pr(>|t|)`<0.05),])
-      Sigi=Sigi[!grepl("\\bIntercept\\b",Sigi)]
-      Sigi=Sigi[!grepl('year',Sigi)]
-      Sigi.count=sapply(Sigi[grepl('count',Sigi)], function(x) substr(x,7,30))
-      Sigi.zero=sapply(Sigi[grepl('zero',Sigi)], function(x) substr(x,6,30))
-      if(ERROR.st[[i]]%in%c("Pois","NB")) Sigi.count=Sigi
-      Sig.terms[[i]]=list(Sigi.count=Sigi.count,Sigi.zero=Sigi.zero)
-      
-      dd=a$`Pr(>|t|)`[match(Sigi,row.names(a))]
-      names(dd)=Sigi
-      if(!ERROR.st[[i]]%in%c("Pois","NB")) 
+      Sig.terms=vector('list',N.species)
+      names(Sig.terms)=TARGETS.name
+      Sig.term.coeff=Sig.terms
+      for (i in 1:N.species)
       {
-        Sigi.count=dd[grepl('count',names(dd))]
-        names(Sigi.count)=sapply( names(Sigi.count)[grepl('count', names(Sigi.count))], function(x) substr(x,7,30))
-        Sigi.zero=dd[grepl('zero',names(dd))]
-        names(Sigi.zero)=sapply( names(Sigi.zero)[grepl('zero', names(Sigi.zero))], function(x) substr(x,6,30))
-        Sig.term.coeff[[i]]=list(Sigi.count=Sigi.count,Sigi.zero=Sigi.zero)
+        a=as.data.frame.matrix(coeftest(Store[[i]]$Fit))
+        write.csv(a,paste("Paper/Anovas/Anova.abundance_",names(Store)[i],".csv",sep=""),row.names=T)
+        
+        id=match('Pr(>|z|)',names(a))
+        if(length(id)>0) names(a)[id]='Pr(>|t|)'
+        
+        Sigi=rownames(a[which(a$`Pr(>|t|)`<0.05),])
+        Sigi=Sigi[!grepl("\\bIntercept\\b",Sigi)]
+        Sigi=Sigi[!grepl('year',Sigi)]
+        Sigi.count=sapply(Sigi[grepl('count',Sigi)], function(x) substr(x,7,30))
+        Sigi.zero=sapply(Sigi[grepl('zero',Sigi)], function(x) substr(x,6,30))
+        if(ERROR.st[[i]]%in%c("Pois","NB")) Sigi.count=Sigi
+        Sig.terms[[i]]=list(Sigi.count=Sigi.count,Sigi.zero=Sigi.zero)
+        
+        dd=a$`Pr(>|t|)`[match(Sigi,row.names(a))]
+        names(dd)=Sigi
+        if(!ERROR.st[[i]]%in%c("Pois","NB")) 
+        {
+          Sigi.count=dd[grepl('count',names(dd))]
+          names(Sigi.count)=sapply( names(Sigi.count)[grepl('count', names(Sigi.count))], function(x) substr(x,7,30))
+          Sigi.zero=dd[grepl('zero',names(dd))]
+          names(Sigi.zero)=sapply( names(Sigi.zero)[grepl('zero', names(Sigi.zero))], function(x) substr(x,6,30))
+          Sig.term.coeff[[i]]=list(Sigi.count=Sigi.count,Sigi.zero=Sigi.zero)
+        }
+        if(ERROR.st[[i]]%in%c("Pois","NB")) Sig.term.coeff[[i]]=list(Sigi.count=dd,Sigi.zero=NULL)
+        
       }
-      if(ERROR.st[[i]]%in%c("Pois","NB")) Sig.term.coeff[[i]]=list(Sigi.count=dd,Sigi.zero=NULL)
-      
     }
-  }
-
-  
+    
+    
     #Wald statistic
-  #Fit is full model, Fit1 is full model - term
-  #waldtest(Fit,Fit1)
-  
-    #stepwise likelihood ratios
-  if(do.like.ratio.test=="YES")
-  {
-    lrtest(Full.mod,Nested.mod)  #use this
+    #Fit is full model, Fit1 is full model - term
+    #waldtest(Fit,Fit1)
     
-    fun.LRT.mixture=function(M1,M2,df)
+    #stepwise likelihood ratios
+    if(do.like.ratio.test=="YES")
     {
-      #M1 is full model, M2 is the nested model without the term
-      L1=logLik(M1)
-      L2=logLik(M2)
-      L=2*(L1-L2)
-      L=abs(as.numeric(L))
-      p=1-pchisq(L,df)
-      output=round(c(L,p),digits=4)
-      names(output)=c("LikeRatio","p value")
-      return(output)
+      lrtest(Full.mod,Nested.mod)  #use this
+      
+      fun.LRT.mixture=function(M1,M2,df)
+      {
+        #M1 is full model, M2 is the nested model without the term
+        L1=logLik(M1)
+        L2=logLik(M2)
+        L=2*(L1-L2)
+        L=abs(as.numeric(L))
+        p=1-pchisq(L,df)
+        output=round(c(L,p),digits=4)
+        names(output)=c("LikeRatio","p value")
+        return(output)
+        
+      }
+      
+      #Nested models
+      Nested.mod=BEST.model
+      Nested.mod$`Sandbar shark`=list(
+        as.formula(Catch.Target ~ year+log.Mid.Lat+log.BOTDEPTH+offset(log.Effort)|
+                     year+log.Mid.Lat+offset(log.Effort)),
+        as.formula(Catch.Target ~ year+log.Mid.Lat+log.BOTDEPTH+offset(log.Effort)|
+                     year+log.BOTDEPTH+offset(log.Effort)),
+        as.formula(Catch.Target ~ year+log.BOTDEPTH+offset(log.Effort)|
+                     year+log.Mid.Lat+log.Mid.Lat+offset(log.Effort)),
+        as.formula(Catch.Target ~ year+log.Mid.Lat+offset(log.Effort)|
+                     year+log.Mid.Lat+log.BOTDEPTH+offset(log.Effort))
+      )
+      Nested.mod$`Milk shark`=Nested.mod$`Spot-tail shark`=Nested.mod$`Sandbar shark`
+      
+      Nested.mod$`Blacktip sharks`=list(
+        as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
+                     year + log.BOTDEPTH + offset(log.Effort)),
+        as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
+                     year + log.Mid.Lat  + offset(log.Effort)),
+        as.formula(Catch.Target ~  log.BOTDEPTH + offset(log.Effort) | 
+                     year +log.Mid.Lat + log.BOTDEPTH + offset(log.Effort)),
+        as.formula(Catch.Target ~ log.Mid.Lat  + offset(log.Effort) | 
+                     year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
+      )
+      
+      Nested.mod$`Tiger shark`=Nested.mod$`Scalloped hammerhead`=
+        Nested.mod$`Sliteye shark`=Nested.mod$`Dusky shark`=Nested.mod$`Blacktip sharks`
+      
+      Store.Likes=vector('list',N.species)
+      names(Store.Likes)=names(DATA.list)
+      
+      system.time(for(i in Species.cpue)
+      {
+        Forms=Nested.mod[[i]]
+        Store.Fits=vector('list',length(Forms))
+        for (j in 1:length(Forms))Store.Fits[[j]]=fit.best(subset(DATA.list[[i]],FixedStation=="YES"),
+                                                           Forms[[j]],ERROR.st[[i]])
+        Store.Likes[[i]]=Store.Fits
+      })
+      
+      Store.LRT=vector('list',N.species)
+      names(Store.LRT)=names(DATA.list)
+      for(i in Species.cpue)
+      {
+        M1=Store[[i]]
+        Nested=Store.Likes[[i]]
+        Stores=vector('list',length(Nested))
+        for(j in 1:length(Nested))
+        {
+          Stores[[j]]=NULL
+          if(!is.null(Nested[[j]]))Stores[[j]]=fun.LRT.mixture(M1,Nested[[j]],df=Nested[[j]]$df.residual-M1$df.residual)
+        }
+        
+        Store.LRT[[i]]=Stores
+      }
       
     }
     
-    #Nested models
-    Nested.mod=BEST.model
-    Nested.mod$`Sandbar shark`=list(
-      as.formula(Catch.Target ~ year+log.Mid.Lat+log.BOTDEPTH+offset(log.Effort)|
-                   year+log.Mid.Lat+offset(log.Effort)),
-      as.formula(Catch.Target ~ year+log.Mid.Lat+log.BOTDEPTH+offset(log.Effort)|
-                   year+log.BOTDEPTH+offset(log.Effort)),
-      as.formula(Catch.Target ~ year+log.BOTDEPTH+offset(log.Effort)|
-                   year+log.Mid.Lat+log.Mid.Lat+offset(log.Effort)),
-      as.formula(Catch.Target ~ year+log.Mid.Lat+offset(log.Effort)|
-                   year+log.Mid.Lat+log.BOTDEPTH+offset(log.Effort))
-    )
-    Nested.mod$`Milk shark`=Nested.mod$`Spot-tail shark`=Nested.mod$`Sandbar shark`
+    #1.12.5. Predict year, lat and depth effect and get confidence intervals
     
-    Nested.mod$`Blacktip sharks`=list(
-      as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
-                   year + log.BOTDEPTH + offset(log.Effort)),
-      as.formula(Catch.Target ~ log.Mid.Lat + log.BOTDEPTH + offset(log.Effort) | 
-                   year + log.Mid.Lat  + offset(log.Effort)),
-      as.formula(Catch.Target ~  log.BOTDEPTH + offset(log.Effort) | 
-                   year +log.Mid.Lat + log.BOTDEPTH + offset(log.Effort)),
-      as.formula(Catch.Target ~ log.Mid.Lat  + offset(log.Effort) | 
-                   year + log.Mid.Lat + log.BOTDEPTH + offset(log.Effort))
-    )
-    
-    Nested.mod$`Tiger shark`=Nested.mod$`Scalloped hammerhead`=
-    Nested.mod$`Sliteye shark`=Nested.mod$`Dusky shark`=Nested.mod$`Blacktip sharks`
-
-    Store.Likes=vector('list',N.species)
-    names(Store.Likes)=names(DATA.list)
-    
-    system.time(for(i in Species.cpue)
-    {
-      Forms=Nested.mod[[i]]
-      Store.Fits=vector('list',length(Forms))
-      for (j in 1:length(Forms))Store.Fits[[j]]=fit.best(subset(DATA.list[[i]],FixedStation=="YES"),
-                                                         Forms[[j]],ERROR.st[[i]])
-      Store.Likes[[i]]=Store.Fits
-    })
-    
-    Store.LRT=vector('list',N.species)
-    names(Store.LRT)=names(DATA.list)
+    #1.12.5.1 lsmeans approach (asymptotic errors)
+    PRED.CPUE=vector('list',length(Species.cpue))
+    names(PRED.CPUE)=names(DATA.list)
+    PRED.lat=PRED.z=PRED.CPUE
     for(i in Species.cpue)
     {
-      M1=Store[[i]]
-      Nested=Store.Likes[[i]]
-      Stores=vector('list',length(Nested))
-      for(j in 1:length(Nested))
-      {
-        Stores[[j]]=NULL
-        if(!is.null(Nested[[j]]))Stores[[j]]=fun.LRT.mixture(M1,Nested[[j]],df=Nested[[j]]$df.residual-M1$df.residual)
-      }
-      
-      Store.LRT[[i]]=Stores
+      PRED.CPUE[[i]]=Store[[i]]$year.pred
+      if(!is.null(Store[[i]]$Lat.pred))PRED.lat[[i]]=Store[[i]]$Lat.pred
+      if(!is.null(Store[[i]]$Depth.pred))PRED.z[[i]]=Store[[i]]$Depth.pred
     }
     
-  }
-  
-  
-  #1.12.5. Predict year, lat and depth effect and get confidence intervals
-  
-    #1.12.5.1 lsmeans approach (asymptotic errors)
-  PRED.CPUE=vector('list',length(Species.cpue))
-  names(PRED.CPUE)=names(DATA.list)
-  PRED.lat=PRED.z=PRED.CPUE
-  for(i in Species.cpue)
-  {
-    PRED.CPUE[[i]]=Store[[i]]$year.pred
-    if(!is.null(Store[[i]]$Lat.pred))PRED.lat[[i]]=Store[[i]]$Lat.pred
-    if(!is.null(Store[[i]]$Depth.pred))PRED.z[[i]]=Store[[i]]$Depth.pred
-  }
-
     #1.12.5.2 Bootstrapping approach   #takes 0.2 secs per n.boot iteration   
-  if(do.boot=="YES")
-  {
-    system.time({
-      library(sampling)
-      fn.boot=function(dd)   # stratified sampling with replacement
-      {
-        s=strata(dd,c("year"),size=table(dd$year), method="srswr") 
-        boot.d=getdata(dd,s)
-        return(boot.d)
-      }
-      fit.best.boot=function(DAT,FORMULA,ErroR) # fit models to bootstrapped data
-      {
-        if(ErroR=="ZIP") Fit=zeroinfl(FORMULA, data = DAT, dist = "poisson")
-        if(ErroR=="ZINB") Fit=zeroinfl(FORMULA, data = DAT, dist = "negbin")
-        if(ErroR=="HU.P") Fit=hurdle(FORMULA, data = DAT , dist="poisson")
-        if(ErroR=="HU.NB") Fit=hurdle(FORMULA, data = DAT , dist="negbin")
-        return(list(Fit=Fit,DAT=DAT))
-      }
-      Pred.Model.boot=function(MOD,Dta)
-      {
-        if(!is.null(MOD))PREDS=predict(MOD,Dta, type='response')
-        return(list(PREDS=PREDS))
-      }
-      Pred.Model.boot_count_zero=function(MOD,Dta,PRd.knt,PRd.zro)
-      {
-        PREDS.count=PREDS.zero=NULL
-        if(!is.null(MOD) & PRd.knt=='YES')PREDS.count=predict(MOD,Dta, type='count')
-        if(!is.null(MOD) & PRd.zro=='YES')PREDS.zero=predict(MOD,Dta, type='prob')[,1]
-        return(list(PREDS.count=PREDS.count,PREDS.zero=PREDS.zero))
-      }
-      fn.seQ=function(Min,Max) seq(round(Min),round(Max)) 
-      
-      #fixed stations
-      cores=detectCores()      #setup parallel backend to use many processors
-      cl <- makeCluster(cores[1]-1) #leave 1 core not to overload your computer
-      registerDoParallel(cl)
-      STORE.BOOT=vector('list',N.species)
-      names(STORE.BOOT)=names(DATA.list)
-      for(i in Species.cpue)   
-      {
-        #parallel processing
-        Store.boot=foreach(k=1:n.boot,.errorhandling='remove',.packages=c('sampling','pscl')) %dopar%
+    if(do.boot=="YES")
+    {
+      system.time({
+        library(sampling)
+        fn.boot=function(dd)   # stratified sampling with replacement
         {
-          mod=fit.best.boot(fn.boot(dd=Store[[i]]$DAT),BEST.model[[i]],ERROR.st[[i]])
-          return(mod)
-          rm(mod)
+          s=strata(dd,c("year"),size=table(dd$year), method="srswr") 
+          boot.d=getdata(dd,s)
+          return(boot.d)
         }
-        STORE.BOOT[[i]]=Store.boot
-      }
-      stopCluster(cl)  #stop cluster
-      
-      
-      #predict each boot run   
-      
-      #Vars=all.vars(BEST.model$`Sandbar shark`)[-1]
-      
-      #Year effect
+        fit.best.boot=function(DAT,FORMULA,ErroR) # fit models to bootstrapped data
+        {
+          if(ErroR=="ZIP") Fit=zeroinfl(FORMULA, data = DAT, dist = "poisson")
+          if(ErroR=="ZINB") Fit=zeroinfl(FORMULA, data = DAT, dist = "negbin")
+          if(ErroR=="HU.P") Fit=hurdle(FORMULA, data = DAT , dist="poisson")
+          if(ErroR=="HU.NB") Fit=hurdle(FORMULA, data = DAT , dist="negbin")
+          return(list(Fit=Fit,DAT=DAT))
+        }
+        Pred.Model.boot=function(MOD,Dta)
+        {
+          if(!is.null(MOD))PREDS=predict(MOD,Dta, type='response')
+          return(list(PREDS=PREDS))
+        }
+        Pred.Model.boot_count_zero=function(MOD,Dta,PRd.knt,PRd.zro)
+        {
+          PREDS.count=PREDS.zero=NULL
+          if(!is.null(MOD) & PRd.knt=='YES')PREDS.count=predict(MOD,Dta, type='count')
+          if(!is.null(MOD) & PRd.zro=='YES')PREDS.zero=predict(MOD,Dta, type='prob')[,1]
+          return(list(PREDS.count=PREDS.count,PREDS.zero=PREDS.zero))
+        }
+        fn.seQ=function(Min,Max) seq(round(Min),round(Max)) 
+        
+        #fixed stations
+        cores=detectCores()      #setup parallel backend to use many processors
+        cl <- makeCluster(cores[1]-1) #leave 1 core not to overload your computer
+        registerDoParallel(cl)
+        STORE.BOOT=vector('list',N.species)
+        names(STORE.BOOT)=names(DATA.list)
+        for(i in Species.cpue)   
+        {
+          #parallel processing
+          Store.boot=foreach(k=1:n.boot,.errorhandling='remove',.packages=c('sampling','pscl')) %dopar%
+            {
+              mod=fit.best.boot(fn.boot(dd=Store[[i]]$DAT),BEST.model[[i]],ERROR.st[[i]])
+              return(mod)
+              rm(mod)
+            }
+          STORE.BOOT[[i]]=Store.boot
+        }
+        stopCluster(cl)  #stop cluster
+        
+        
+        #predict each boot run   
+        
+        #Vars=all.vars(BEST.model$`Sandbar shark`)[-1]
+        
+        #Year effect
         #standardised
-      PRED.CPUE=vector('list',N.species)
-      names(PRED.CPUE)=names(DATA.list)
-      for(i in Species.cpue)
-      {
-        dat=subset(Store[[i]]$DAT,Catch.Target>0)  #within species range
-        NEWDATA=data.frame(year=factor(levels(dat$year)),
-                           log.BOTDEPTH=mean(dat$log.BOTDEPTH,na.rm=T),
-                           log.Mid.Lat=mean(dat$log.Mid.Lat,na.rm=T),
-                           log.Effort=mean(dat$log.Effort,na.rm=T))
-        MOD=STORE.BOOT[[i]]
-        An.Ktch=matrix(nrow=length(MOD),ncol=length(NEWDATA$year))
-        colnames(An.Ktch)=NEWDATA$year
-        for (x in 1:length(MOD))
+        PRED.CPUE=vector('list',N.species)
+        names(PRED.CPUE)=names(DATA.list)
+        for(i in Species.cpue)
         {
-          a=Pred.Model.boot(MOD[[x]]$Fit,NEWDATA)$PREDS
-          if(!is.null(a))An.Ktch[x,]=a
+          dat=subset(Store[[i]]$DAT,Catch.Target>0)  #within species range
+          NEWDATA=data.frame(year=factor(levels(dat$year)),
+                             log.BOTDEPTH=mean(dat$log.BOTDEPTH,na.rm=T),
+                             log.Mid.Lat=mean(dat$log.Mid.Lat,na.rm=T),
+                             log.Effort=mean(dat$log.Effort,na.rm=T))
+          MOD=STORE.BOOT[[i]]
+          An.Ktch=matrix(nrow=length(MOD),ncol=length(NEWDATA$year))
+          colnames(An.Ktch)=NEWDATA$year
+          for (x in 1:length(MOD))
+          {
+            a=Pred.Model.boot(MOD[[x]]$Fit,NEWDATA)$PREDS
+            if(!is.null(a))An.Ktch[x,]=a
+          }
+          PRD=data.frame(Year=NEWDATA$year,
+                         MEAN=apply(An.Ktch, 2, function(x) median(x, na.rm=T)),
+                         SD=apply(An.Ktch,2,function(x) sd(x,na.rm=T)),
+                         LOW=apply(An.Ktch, 2, function(x) quantile(x, 0.025,na.rm=T)),
+                         UP=apply(An.Ktch, 2, function(x) quantile(x, 0.975,na.rm=T)))
+          PRD$CV=(PRD$SD/PRD$MEAN)*100
+          PRED.CPUE[[i]]=PRD
+          rm(dat,MOD)
         }
-        PRD=data.frame(Year=NEWDATA$year,
-                       MEAN=apply(An.Ktch, 2, function(x) median(x, na.rm=T)),
-                       SD=apply(An.Ktch,2,function(x) sd(x,na.rm=T)),
-                       LOW=apply(An.Ktch, 2, function(x) quantile(x, 0.025,na.rm=T)),
-                       UP=apply(An.Ktch, 2, function(x) quantile(x, 0.975,na.rm=T)))
-        PRD$CV=(PRD$SD/PRD$MEAN)*100
-        PRED.CPUE[[i]]=PRD
-        rm(dat,MOD)
-      }
         #nominal
-      nominal.boot=function(DAT) 
-      {
-        DAT$cpue=DAT$Catch.Target/(DAT$N.hooks.Fixed*DAT$SOAK.TIME)
-        Nmnl = DAT %>% 
-          group_by(year) %>%
-          summarise(n = length(cpue),
-                    m = length(cpue[cpue>0]),
-                    mean = mean(cpue[cpue>0])) %>%
-          mutate(p.nz = m/n,
-                 mean.delta = p.nz*mean)%>%
-          as.data.frame
-        Mean.delta=Nmnl$mean.delta
-        names(Mean.delta)=Nmnl$year
-        return(Mean.delta)
-      }
-      Nominal.CPUE=vector('list',N.species)
-      names(Nominal.CPUE)=names(DATA.list)
-      for(i in Species.cpue)
-      {
-        dummy=vector('list',length(STORE.BOOT[[i]]))
-        for(b in 1:length(dummy))dummy[[b]]=nominal.boot(DAT=STORE.BOOT[[i]][[b]]$DAT)
-        dummy=do.call(rbind,dummy)
-        Nominal.CPUE[[i]]=data.frame(year=as.numeric(colnames(dummy)),
-                                     mean=apply(dummy, 2, function(x) median(x, na.rm=T)),
-                                     low95=apply(dummy, 2, function(x) quantile(x, 0.025,na.rm=T)),
-                                     up95=apply(dummy, 2, function(x) quantile(x, 0.975,na.rm=T)))
-      }
-      
+        nominal.boot=function(DAT) 
+        {
+          DAT$cpue=DAT$Catch.Target/(DAT$N.hooks.Fixed*DAT$SOAK.TIME)
+          Nmnl = DAT %>% 
+            group_by(year) %>%
+            summarise(n = length(cpue),
+                      m = length(cpue[cpue>0]),
+                      mean = mean(cpue[cpue>0])) %>%
+            mutate(p.nz = m/n,
+                   mean.delta = p.nz*mean)%>%
+            as.data.frame
+          Mean.delta=Nmnl$mean.delta
+          names(Mean.delta)=Nmnl$year
+          return(Mean.delta)
+        }
+        Nominal.CPUE=vector('list',N.species)
+        names(Nominal.CPUE)=names(DATA.list)
+        for(i in Species.cpue)
+        {
+          dummy=vector('list',length(STORE.BOOT[[i]]))
+          for(b in 1:length(dummy))dummy[[b]]=nominal.boot(DAT=STORE.BOOT[[i]][[b]]$DAT)
+          dummy=do.call(rbind,dummy)
+          Nominal.CPUE[[i]]=data.frame(year=as.numeric(colnames(dummy)),
+                                       mean=apply(dummy, 2, function(x) median(x, na.rm=T)),
+                                       low95=apply(dummy, 2, function(x) quantile(x, 0.025,na.rm=T)),
+                                       up95=apply(dummy, 2, function(x) quantile(x, 0.975,na.rm=T)))
+        }
+        
+        
+        #Latitude effect  
+        PRED.lat=vector('list',length(Species.cpue))
+        names(PRED.lat)=names(DATA.list)
+        PRED.lat.count=PRED.lat.zero=PRED.lat
+        for(i in Species.cpue)
+        {
+          dat=subset(Store[[i]]$DAT,Catch.Target>0)  #predict within species range
+          Yr.ref=names(sort(table(dat$year)))
+          Yr.ref=Yr.ref[length(Yr.ref)]
+          NEWDATA=data.frame(year=factor(Yr.ref,levels(dat$year)),
+                             log.BOTDEPTH=mean(dat$log.BOTDEPTH,na.rm=T),
+                             log.Mid.Lat=log(fn.seQ(min(dat$Mid.Lat,na.rm=T),max(dat$Mid.Lat,na.rm=T))),
+                             log.Effort=mean(dat$log.Effort,na.rm=T))
+          MOD=STORE.BOOT[[i]]
+          An.Ktch=matrix(nrow=length(MOD),ncol=length(NEWDATA$log.Mid.Lat))
+          colnames(An.Ktch)=exp(NEWDATA$log.Mid.Lat)
+          An.Ktch.count=An.Ktch.zero=An.Ktch
+          PRd.knt=PRd.zro="NO"  #select species for which lat is significant
+          if("log.Mid.Lat"%in%Sig.terms[[i]]$Sigi.count) PRd.knt="YES"
+          if("log.Mid.Lat"%in%Sig.terms[[i]]$Sigi.zero) PRd.zro="YES"
+          
+          if(PRd.knt=="YES")
+          {
+            for (x in 1:length(MOD))An.Ktch.count[x,]=Pred.Model.boot_count_zero(MOD[[x]]$Fit,NEWDATA,PRd.knt,PRd.zro)$PREDS.count
+            PRD=data.frame(Mid.Lat=exp(NEWDATA$log.Mid.Lat),
+                           MEAN=apply(An.Ktch.count, 2, function(x) median(x, na.rm=T)),
+                           SD=apply(An.Ktch.count,2,function(x) sd(x,na.rm=T)),
+                           LOW=apply(An.Ktch.count, 2, function(x) quantile(x, 0.025,na.rm=T)),
+                           UP=apply(An.Ktch.count, 2, function(x) quantile(x, 0.975,na.rm=T)))
+            PRD$CV=PRD$SD/PRD$MEAN*100
+            PRED.lat.count[[i]]=PRD
+          }
+          if(PRd.zro=="YES")
+          {
+            for (x in 1:length(MOD))An.Ktch.zero[x,]=Pred.Model.boot_count_zero(MOD[[x]]$Fit,NEWDATA,PRd.knt,PRd.zro)$PREDS.zero
+            PRD=data.frame(Mid.Lat=exp(NEWDATA$log.Mid.Lat),
+                           MEAN=apply(An.Ktch.zero, 2, function(x) median(x, na.rm=T)),
+                           SD=apply(An.Ktch.zero,2,function(x) sd(x,na.rm=T)),
+                           LOW=apply(An.Ktch.zero, 2, function(x) quantile(x, 0.025,na.rm=T)),
+                           UP=apply(An.Ktch.zero, 2, function(x) quantile(x, 0.975,na.rm=T)))
+            PRD$CV=PRD$SD/PRD$MEAN*100
+            PRED.lat.zero[[i]]=PRD
+          }
+          rm(dat,MOD)
+        }
+        
+        #Depth effect
+        PRED.z=vector('list',length(Species.cpue))
+        names(PRED.z)=names(DATA.list)
+        PRED.z.count=PRED.z.zero=PRED.z
+        for(i in Species.cpue)
+        {
+          dat=subset(Store[[i]]$DAT,Catch.Target>0)  #within species range
+          Yr.ref=names(sort(table(dat$year)))
+          Yr.ref=Yr.ref[length(Yr.ref)]
+          Z.seq=10*round(seq(round(min(dat$BOTDEPTH,na.rm=T)),round(max(dat$BOTDEPTH,na.rm=T)),by=10)/10)
+          NEWDATA=data.frame(year=factor(Yr.ref,levels(dat$year)),
+                             log.BOTDEPTH=log(Z.seq),
+                             log.Mid.Lat=mean(dat$log.Mid.Lat,na.rm=T),
+                             log.Effort=mean(dat$log.Effort,na.rm=T))
+          MOD=STORE.BOOT[[i]]
+          An.Ktch=matrix(nrow=length(MOD),ncol=length(NEWDATA$log.BOTDEPTH))
+          colnames(An.Ktch)=exp(NEWDATA$log.BOTDEPTH)
+          An.Ktch.count=An.Ktch.zero=An.Ktch
+          PRd.knt=PRd.zro="NO"  #select species for which lat is significant
+          if("log.BOTDEPTH"%in%Sig.terms[[i]]$Sigi.count) PRd.knt="YES"
+          if("log.BOTDEPTH"%in%Sig.terms[[i]]$Sigi.zero) PRd.zro="YES"
+          
+          if(PRd.knt=="YES")
+          {
+            for (x in 1:length(MOD))An.Ktch.count[x,]=Pred.Model.boot_count_zero(MOD[[x]]$Fit,NEWDATA,PRd.knt,PRd.zro)$PREDS.count
+            PRD=data.frame(BOTDEPTH=exp(NEWDATA$log.BOTDEPTH),
+                           MEAN=apply(An.Ktch.count, 2, function(x) median(x, na.rm=T)),
+                           SD=apply(An.Ktch.count,2,function(x) sd(x,na.rm=T)),
+                           LOW=apply(An.Ktch.count, 2, function(x) quantile(x, 0.025,na.rm=T)),
+                           UP=apply(An.Ktch.count, 2, function(x) quantile(x, 0.975,na.rm=T)))
+            PRD$CV=PRD$SD/PRD$MEAN*100
+            PRED.z.count[[i]]=PRD
+          }
+          if(PRd.zro=="YES")
+          {
+            for (x in 1:length(MOD))An.Ktch.zero[x,]=Pred.Model.boot_count_zero(MOD[[x]]$Fit,NEWDATA,PRd.knt,PRd.zro)$PREDS.zero
+            PRD=data.frame(BOTDEPTH=exp(NEWDATA$log.BOTDEPTH),
+                           MEAN=apply(An.Ktch.zero, 2, function(x) median(x, na.rm=T)),
+                           SD=apply(An.Ktch.zero,2,function(x) sd(x,na.rm=T)),
+                           LOW=apply(An.Ktch.zero, 2, function(x) quantile(x, 0.025,na.rm=T)),
+                           UP=apply(An.Ktch.zero, 2, function(x) quantile(x, 0.975,na.rm=T)))
+            PRD$CV=PRD$SD/PRD$MEAN*100
+            PRED.z.zero[[i]]=PRD
+          }
+          rm(dat,MOD)
+        }
+      })
+    }
     
-      #Latitude effect  
-      PRED.lat=vector('list',length(Species.cpue))
-      names(PRED.lat)=names(DATA.list)
-      PRED.lat.count=PRED.lat.zero=PRED.lat
-      for(i in Species.cpue)
+    
+    #1.12.6. Plot standardised cpue
+    fn.relative=function(D)
+    {
+      Mn=mean(D$MEAN)
+      D$LOW=D$LOW/Mn
+      D$UP=D$UP/Mn
+      D$MEAN=D$MEAN/Mn
+      return(D)
+    }
+    CI.fun=function(YR,LOW1,UP1,Colr,Colr2)
+    {
+      Year.Vec <- c(YR, tail(YR, 1), rev(YR), YR[1]) 
+      Biom.Vec <- c(LOW1, tail(UP1, 1), rev(UP1), LOW1[1])
+      polygon(Year.Vec, Biom.Vec, col = Colr, border = Colr2)
+    }
+    fun.plot.yr.pred=function(PRD,X,normalised,REV,n.seq,YLIM,XLIM,Type,pLOT=FALSE)
+    {
+      THIS=match(X,names(PRD))
+      if(X=="BOTDEPTH")
+      { 
+        dd=subset(DATA.list[[i]],Catch.Target>0)
+        that=match(X,names(dd))
+        X.max=max(dd[,that],na.rm=T)
+        PRD=PRD[PRD[,THIS]<=X.max,]
+      }
+      if(REV=="YES")
       {
-        dat=subset(Store[[i]]$DAT,Catch.Target>0)  #predict within species range
-        Yr.ref=names(sort(table(dat$year)))
-        Yr.ref=Yr.ref[length(Yr.ref)]
-        NEWDATA=data.frame(year=factor(Yr.ref,levels(dat$year)),
-                           log.BOTDEPTH=mean(dat$log.BOTDEPTH,na.rm=T),
-                           log.Mid.Lat=log(fn.seQ(min(dat$Mid.Lat,na.rm=T),max(dat$Mid.Lat,na.rm=T))),
-                           log.Effort=mean(dat$log.Effort,na.rm=T))
-        MOD=STORE.BOOT[[i]]
-        An.Ktch=matrix(nrow=length(MOD),ncol=length(NEWDATA$log.Mid.Lat))
-        colnames(An.Ktch)=exp(NEWDATA$log.Mid.Lat)
-        An.Ktch.count=An.Ktch.zero=An.Ktch
-        PRd.knt=PRd.zro="NO"  #select species for which lat is significant
-        if("log.Mid.Lat"%in%Sig.terms[[i]]$Sigi.count) PRd.knt="YES"
-        if("log.Mid.Lat"%in%Sig.terms[[i]]$Sigi.zero) PRd.zro="YES"
+        PRD[,THIS]=-PRD[,THIS]
+        PRD=PRD[order(PRD[,THIS]),]
+      }
+      #standardise to a mean score of 1
+      if(normalised=="YES") PRD=fn.relative(PRD)
+      yr=as.numeric(as.character(PRD[,THIS]))
+      ALL.yrs=seq(yr[1],yr[length(yr)])
+      MeAn=PRD$MEAN
+      UppCI=PRD$UP
+      LowCI=PRD$LOW
+      dat.plt=data.frame(yr=yr,MeAn=MeAn,UppCI=UppCI,LowCI=LowCI,CV=PRD$CV,SE=PRD$SE)
+      #add missing years
+      if(X=="year")
+      {
+        mis.yr=ALL.yrs[which(!ALL.yrs%in%yr)]
+        if(length(mis.yr)>0)
+        {
+          dummy=dat.plt[1:length(mis.yr),]
+          dummy[,]=NA
+          dummy$yr=mis.yr
+          dat.plt=rbind(dat.plt,dummy)
+        }
+      }
+      if(X=="year")dat.plt=dat.plt[order(dat.plt$yr),]
+      if(is.null(YLIM))YLIM=c(0,max(dat.plt$UppCI,na.rm=T))
+      if(YLIM[2]>1e5) YLIM[2]=quantile(dat.plt$UppCI,0.5)
+      if(is.null(XLIM)) XLIM=range(dat.plt[,1])
+      if(pLOT)
+      {
+        if(Type=="points")
+        {
+          with(dat.plt,plot(yr,MeAn,pch=19,main="",xlab="",ylab="",
+                            cex=1.25,xaxt="n",cex.axis=1.25,ylim=YLIM,xlim=XLIM))
+          suppressWarnings(with(dat.plt,arrows(x0=yr, y0=LowCI, x1=yr, y1=UppCI,code = 3,angle=90,length=.025)))
+        }
+        if(Type=="polygon")
+        {
+          with(dat.plt,plot(yr,MeAn,type='l',main="",xlab="",ylab="",
+                            lwd=2,xaxt="n",cex.axis=1.25,ylim=YLIM,xlim=XLIM))
+          with(dat.plt,CI.fun(yr,UppCI,LowCI,"grey80","transparent"))
+          with(dat.plt,lines(yr,MeAn,type='l',lwd=2))
+        }
+        axis(1,seq(XLIM[1],XLIM[2],n.seq),seq(XLIM[1],XLIM[2],n.seq),tck=-0.04,cex.axis=1.25)
+        if(n.seq<10)axis(1,seq(XLIM[1],XLIM[2],1),F,tck=-0.02,cex.axis=1.25)
+        #with(dat.plt,axis(1,yr,F,tck=-0.025))
+        #with(dat.plt,axis(1,seq(yr[1],yr[length(yr)],n.seq),F,tck=-0.05))
+        #with(dat.plt,axis(1,seq(yr[1],yr[length(yr)],n.seq),seq(yr[1],yr[length(yr)],n.seq),tck=-0.05,cex.axis=1.25))
         
-        if(PRd.knt=="YES")
-        {
-          for (x in 1:length(MOD))An.Ktch.count[x,]=Pred.Model.boot_count_zero(MOD[[x]]$Fit,NEWDATA,PRd.knt,PRd.zro)$PREDS.count
-          PRD=data.frame(Mid.Lat=exp(NEWDATA$log.Mid.Lat),
-                         MEAN=apply(An.Ktch.count, 2, function(x) median(x, na.rm=T)),
-                         SD=apply(An.Ktch.count,2,function(x) sd(x,na.rm=T)),
-                         LOW=apply(An.Ktch.count, 2, function(x) quantile(x, 0.025,na.rm=T)),
-                         UP=apply(An.Ktch.count, 2, function(x) quantile(x, 0.975,na.rm=T)))
-          PRD$CV=PRD$SD/PRD$MEAN*100
-          PRED.lat.count[[i]]=PRD
-        }
-        if(PRd.zro=="YES")
-        {
-          for (x in 1:length(MOD))An.Ktch.zero[x,]=Pred.Model.boot_count_zero(MOD[[x]]$Fit,NEWDATA,PRd.knt,PRd.zro)$PREDS.zero
-          PRD=data.frame(Mid.Lat=exp(NEWDATA$log.Mid.Lat),
-                         MEAN=apply(An.Ktch.zero, 2, function(x) median(x, na.rm=T)),
-                         SD=apply(An.Ktch.zero,2,function(x) sd(x,na.rm=T)),
-                         LOW=apply(An.Ktch.zero, 2, function(x) quantile(x, 0.025,na.rm=T)),
-                         UP=apply(An.Ktch.zero, 2, function(x) quantile(x, 0.975,na.rm=T)))
-          PRD$CV=PRD$SD/PRD$MEAN*100
-          PRED.lat.zero[[i]]=PRD
-        }
-        rm(dat,MOD)
       }
-      
-      #Depth effect
-      PRED.z=vector('list',length(Species.cpue))
-      names(PRED.z)=names(DATA.list)
-      PRED.z.count=PRED.z.zero=PRED.z
-      for(i in Species.cpue)
-      {
-        dat=subset(Store[[i]]$DAT,Catch.Target>0)  #within species range
-        Yr.ref=names(sort(table(dat$year)))
-        Yr.ref=Yr.ref[length(Yr.ref)]
-        Z.seq=10*round(seq(round(min(dat$BOTDEPTH,na.rm=T)),round(max(dat$BOTDEPTH,na.rm=T)),by=10)/10)
-        NEWDATA=data.frame(year=factor(Yr.ref,levels(dat$year)),
-                           log.BOTDEPTH=log(Z.seq),
-                           log.Mid.Lat=mean(dat$log.Mid.Lat,na.rm=T),
-                           log.Effort=mean(dat$log.Effort,na.rm=T))
-        MOD=STORE.BOOT[[i]]
-        An.Ktch=matrix(nrow=length(MOD),ncol=length(NEWDATA$log.BOTDEPTH))
-        colnames(An.Ktch)=exp(NEWDATA$log.BOTDEPTH)
-        An.Ktch.count=An.Ktch.zero=An.Ktch
-        PRd.knt=PRd.zro="NO"  #select species for which lat is significant
-        if("log.BOTDEPTH"%in%Sig.terms[[i]]$Sigi.count) PRd.knt="YES"
-        if("log.BOTDEPTH"%in%Sig.terms[[i]]$Sigi.zero) PRd.zro="YES"
-        
-        if(PRd.knt=="YES")
-        {
-          for (x in 1:length(MOD))An.Ktch.count[x,]=Pred.Model.boot_count_zero(MOD[[x]]$Fit,NEWDATA,PRd.knt,PRd.zro)$PREDS.count
-          PRD=data.frame(BOTDEPTH=exp(NEWDATA$log.BOTDEPTH),
-                         MEAN=apply(An.Ktch.count, 2, function(x) median(x, na.rm=T)),
-                         SD=apply(An.Ktch.count,2,function(x) sd(x,na.rm=T)),
-                         LOW=apply(An.Ktch.count, 2, function(x) quantile(x, 0.025,na.rm=T)),
-                         UP=apply(An.Ktch.count, 2, function(x) quantile(x, 0.975,na.rm=T)))
-          PRD$CV=PRD$SD/PRD$MEAN*100
-          PRED.z.count[[i]]=PRD
-        }
-        if(PRd.zro=="YES")
-        {
-          for (x in 1:length(MOD))An.Ktch.zero[x,]=Pred.Model.boot_count_zero(MOD[[x]]$Fit,NEWDATA,PRd.knt,PRd.zro)$PREDS.zero
-          PRD=data.frame(BOTDEPTH=exp(NEWDATA$log.BOTDEPTH),
-                         MEAN=apply(An.Ktch.zero, 2, function(x) median(x, na.rm=T)),
-                         SD=apply(An.Ktch.zero,2,function(x) sd(x,na.rm=T)),
-                         LOW=apply(An.Ktch.zero, 2, function(x) quantile(x, 0.025,na.rm=T)),
-                         UP=apply(An.Ktch.zero, 2, function(x) quantile(x, 0.975,na.rm=T)))
-          PRD$CV=PRD$SD/PRD$MEAN*100
-          PRED.z.zero[[i]]=PRD
-        }
-        rm(dat,MOD)
-      }
-    })
-  }
-  
-  
-  #1.12.6. Plot standardised cpue
-  fn.relative=function(D)
-  {
-    Mn=mean(D$MEAN)
-    D$LOW=D$LOW/Mn
-    D$UP=D$UP/Mn
-    D$MEAN=D$MEAN/Mn
-    return(D)
-  }
-  CI.fun=function(YR,LOW1,UP1,Colr,Colr2)
-  {
-    Year.Vec <- c(YR, tail(YR, 1), rev(YR), YR[1]) 
-    Biom.Vec <- c(LOW1, tail(UP1, 1), rev(UP1), LOW1[1])
-    polygon(Year.Vec, Biom.Vec, col = Colr, border = Colr2)
-  }
-  fun.plot.yr.pred=function(PRD,X,normalised,REV,n.seq,YLIM,XLIM,Type,pLOT=FALSE)
-  {
-    THIS=match(X,names(PRD))
-    if(X=="BOTDEPTH")
-    { 
-      dd=subset(DATA.list[[i]],Catch.Target>0)
-      that=match(X,names(dd))
-      X.max=max(dd[,that],na.rm=T)
-      PRD=PRD[PRD[,THIS]<=X.max,]
+      return(dat.plt)
     }
-    if(REV=="YES")
-    {
-      PRD[,THIS]=-PRD[,THIS]
-      PRD=PRD[order(PRD[,THIS]),]
-    }
-    #standardise to a mean score of 1
-    if(normalised=="YES") PRD=fn.relative(PRD)
-    yr=as.numeric(as.character(PRD[,THIS]))
-    ALL.yrs=seq(yr[1],yr[length(yr)])
-    MeAn=PRD$MEAN
-    UppCI=PRD$UP
-    LowCI=PRD$LOW
-    dat.plt=data.frame(yr=yr,MeAn=MeAn,UppCI=UppCI,LowCI=LowCI,CV=PRD$CV,SE=PRD$SE)
-    #add missing years
-    if(X=="year")
-    {
-      mis.yr=ALL.yrs[which(!ALL.yrs%in%yr)]
-      if(length(mis.yr)>0)
-      {
-        dummy=dat.plt[1:length(mis.yr),]
-        dummy[,]=NA
-        dummy$yr=mis.yr
-        dat.plt=rbind(dat.plt,dummy)
-      }
-    }
-    if(X=="year")dat.plt=dat.plt[order(dat.plt$yr),]
-    if(is.null(YLIM))YLIM=c(0,max(dat.plt$UppCI,na.rm=T))
-    if(YLIM[2]>1e5) YLIM[2]=quantile(dat.plt$UppCI,0.5)
-    if(is.null(XLIM)) XLIM=range(dat.plt[,1])
-    if(pLOT)
-    {
-      if(Type=="points")
-      {
-        with(dat.plt,plot(yr,MeAn,pch=19,main="",xlab="",ylab="",
-                          cex=1.25,xaxt="n",cex.axis=1.25,ylim=YLIM,xlim=XLIM))
-        suppressWarnings(with(dat.plt,arrows(x0=yr, y0=LowCI, x1=yr, y1=UppCI,code = 3,angle=90,length=.025)))
-      }
-      if(Type=="polygon")
-      {
-        with(dat.plt,plot(yr,MeAn,type='l',main="",xlab="",ylab="",
-                          lwd=2,xaxt="n",cex.axis=1.25,ylim=YLIM,xlim=XLIM))
-        with(dat.plt,CI.fun(yr,UppCI,LowCI,"grey80","transparent"))
-        with(dat.plt,lines(yr,MeAn,type='l',lwd=2))
-      }
-      axis(1,seq(XLIM[1],XLIM[2],n.seq),seq(XLIM[1],XLIM[2],n.seq),tck=-0.04,cex.axis=1.25)
-      if(n.seq<10)axis(1,seq(XLIM[1],XLIM[2],1),F,tck=-0.02,cex.axis=1.25)
-      #with(dat.plt,axis(1,yr,F,tck=-0.025))
-      #with(dat.plt,axis(1,seq(yr[1],yr[length(yr)],n.seq),F,tck=-0.05))
-      #with(dat.plt,axis(1,seq(yr[1],yr[length(yr)],n.seq),seq(yr[1],yr[length(yr)],n.seq),tck=-0.05,cex.axis=1.25))
-      
-    }
-    return(dat.plt)
+    
   }
-  
+   
   
   #1.13.   Trends in Sex ratio           
   if(do.sex.ratio=="YES")
@@ -4367,123 +4554,127 @@ if(Do.abundance=="YES")
   
   
   #1.14.   Trends in size
-  #fit gaussian model to Fixed stations
-  TARGETS.size=TARGETS
-  N.species.size=length(TARGETS.size)
-  BEST.model.size=BEST.model
-  for(i in 1:N.species.size) BEST.model.size[[i]]=formula(paste("FL",paste(c("year",
-                                  's(Mid.Lat,k=3)','s(BOTDEPTH,k=3)'),collapse="+"),sep="~"))
-  BEST.model.size$`Milk shark`=BEST.model.size$`Spot-tail shark`=BEST.model.size$`Sliteye shark`=
+  if(do.GAM=="YES" | do.GLM=='YES')
+  {
+    #fit gaussian model to Fixed stations
+    TARGETS.size=TARGETS
+    N.species.size=length(TARGETS.size)
+    BEST.model.size=BEST.model
+    for(i in 1:N.species.size) BEST.model.size[[i]]=formula(paste("FL",paste(c("year",
+                                                                               's(Mid.Lat,k=3)','s(BOTDEPTH,k=3)'),collapse="+"),sep="~"))
+    BEST.model.size$`Milk shark`=BEST.model.size$`Spot-tail shark`=BEST.model.size$`Sliteye shark`=
       formula(paste("FL",paste(c("year",'s(Mid.Lat,k=3)'),collapse="+"),sep="~"))
-  BEST.model.size$`Scalloped hammerhead`=formula(paste("FL",paste(c("year",
-                                  's(BOTDEPTH,k=3)'),collapse="+"),sep="~"))
-  Size.fun=function(dat,FORMULA)
-  {
-    if(do.GLM=="YES")
+    BEST.model.size$`Scalloped hammerhead`=formula(paste("FL",paste(c("year",
+                                                                      's(BOTDEPTH,k=3)'),collapse="+"),sep="~"))
+    Size.fun=function(dat,FORMULA)
     {
-      model<- glm(FL~year+log.BOTDEPTH+log.Mid.Lat, data=dat,family=gaussian,maxit=500)
-      #Signifcance=anova(model,test="Chisq")
-      
-      #Predictions
-      year.pred=summary(emmeans(model,"year", type="response"))
-      Lata=range(floor(dat$Mid.Lat))
-      Lat.pred=summary(emmeans(model,"log.Mid.Lat", type="response",at=list(log.Mid.Lat=log(seq(Lata[1],Lata[2],.1)))))
-      ZZ=range(10*floor(dat$BOTDEPTH/10))
-      Depth.pred=summary(emmeans(model,"log.BOTDEPTH", type="response",at=list(log.BOTDEPTH=log(seq(ZZ[1],ZZ[2],10)))))
-    }
-    if(do.GAM=="YES")
-    {
-      model<- gam(FORMULA, data=dat,method = "REML",family=gaussian)
-      #Signifcance=anova(model)
-      
-      #Predictions
-      year.pred=summary(emmeans(model,"year", type="response"))
-      Lat.pred=NULL
-      used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
-      if(sum(used.term)>0)
+      if(do.GLM=="YES")
       {
+        model<- glm(FL~year+log.BOTDEPTH+log.Mid.Lat, data=dat,family=gaussian,maxit=500)
+        #Signifcance=anova(model,test="Chisq")
+        
+        #Predictions
+        year.pred=summary(emmeans(model,"year", type="response"))
         Lata=range(floor(dat$Mid.Lat))
-        Lat.pred=summary(emmeans(model,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.1))))
-      }
-      Depth.pred=NULL
-      used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
-      if(sum(used.term)>0)
-      {
+        Lat.pred=summary(emmeans(model,"log.Mid.Lat", type="response",at=list(log.Mid.Lat=log(seq(Lata[1],Lata[2],.1)))))
         ZZ=range(10*floor(dat$BOTDEPTH/10))
-        Depth.pred=summary(emmeans(model,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10))))
+        Depth.pred=summary(emmeans(model,"log.BOTDEPTH", type="response",at=list(log.BOTDEPTH=log(seq(ZZ[1],ZZ[2],10)))))
       }
+      if(do.GAM=="YES")
+      {
+        model<- gam(FORMULA, data=dat,method = "REML",family=gaussian)
+        #Signifcance=anova(model)
+        
+        #Predictions
+        year.pred=summary(emmeans(model,"year", type="response"))
+        Lat.pred=NULL
+        used.term=grepl("Mid.Lat", attr(terms(FORMULA),'term.labels'))
+        if(sum(used.term)>0)
+        {
+          Lata=range(floor(dat$Mid.Lat))
+          Lat.pred=summary(emmeans(model,"Mid.Lat", type="response",at=list(Mid.Lat=seq(Lata[1],Lata[2],.1))))
+        }
+        Depth.pred=NULL
+        used.term=grepl("BOTDEPTH", attr(terms(FORMULA),'term.labels'))
+        if(sum(used.term)>0)
+        {
+          ZZ=range(10*floor(dat$BOTDEPTH/10))
+          Depth.pred=summary(emmeans(model,"BOTDEPTH", type="response",at=list(BOTDEPTH=seq(ZZ[1],ZZ[2],10))))
+        }
+      }
+      
+      return(list(Fit=model,DAT=dat,year.pred=year.pred,Lat.pred=Lat.pred,Depth.pred=Depth.pred))
     }
     
-    return(list(Fit=model,DAT=dat,year.pred=year.pred,Lat.pred=Lat.pred,Depth.pred=Depth.pred))
-  }
-  
-  Store.size=vector('list',N.species.size)
-  names(Store.size)=names(TARGETS.size)
-  for (i in 1:N.species.size)
-  {
-    dat=subset(DATA,SPECIES==TARGETS.size[i] & !is.na(FL) & year%in%YEAR 
-               & BOTDEPTH <210 & Month%in%These.Months 
-               & Set.time <"08:00" & FixedStation=="YES")
-    dat=subset(dat,!year==2004)
+    Store.size=vector('list',N.species.size)
+    names(Store.size)=names(TARGETS.size)
+    for (i in 1:N.species.size)
+    {
+      dat=subset(DATA,SPECIES==TARGETS.size[i] & !is.na(FL) & year%in%YEAR 
+                 & BOTDEPTH <210 & Month%in%These.Months 
+                 & Set.time <"08:00" & FixedStation=="YES")
+      dat=subset(dat,!year==2004)
+      
+      yr.tabl=table(dat$year)
+      
+      #at least 5 observations per year
+      dat=subset(dat,year%in%as.numeric(names(yr.tabl[yr.tabl>=5])))
+      
+      dat$year=factor(dat$year,levels=sort(unique(dat$year)))
+      dat$SEX=as.factor(dat$SEX)
+      
+      dat$Mid.Lat=abs(dat$Mid.Lat)
+      dat$log.BOTDEPTH=log(dat$BOTDEPTH)
+      dat$log.Mid.Lat=log(dat$Mid.Lat)
+      
+      Store.size[[i]]=Size.fun(dat,FORMULA=BEST.model.size[[i]])
+    }
     
-    yr.tabl=table(dat$year)
+    #Goodness of fit 
+    Pos.Diag.fn=function(MODEL,M=1)   #function for fit diagnostics
+    {
+      RES=MODEL$residuals   #residuals
+      Std.RES=RES/sd(RES)   #standardised residuals (res/SD(res))
+      PRED=predict(MODEL)
+      
+      qqnorm(RES,main="",ylab="",xlab="")
+      qqline(RES, col = 'grey40',lwd=1.5,lty=2)
+      #mtext(SPECIES,3,outer=F,line=0.25,cex=1.3)
+      if(i==4) mtext("Residuals",2,outer=F,line=1.3,las=3,cex=M)
+      # mtext("                        Theoretical quantiles",1,outer=F,line=1.5,cex=M)
+      
+      hist(Std.RES,xlim=c(-5,5),ylab="",xlab="",main="",col="grey",breaks=50)
+      box()
+      if(i==4)  mtext("Frequency",2,outer=F,line=1.3,las=3,cex=M)
+      #mtext("                      Standardised residuals",1,outer=F,line=1.5,cex=M)
+      
+      plot(PRED,Std.RES,ylab="",xlab="",ylim=c(-5,5))
+      abline(0,0,lwd=1.5,lty=2,col='grey40')
+      if(i==4)  mtext("Standardised residuals",2,outer=F,line=1.3,las=3,cex=M)
+      #mtext("                         Fitted values",1,outer=F,line=1.5,cex=M)
+      
+    }
+    hndl.fit.size=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Size/")
+    fn.fig(paste(hndl.fit.size,"fit.diagnostics",sep=""),1600,2400)
+    par(mfrow=c(N.species.size,3),mar=c(2,2,1.5,1),oma=c(1,1.5,.1,2),mgp=c(2,.7,0))
+    for(i in 1:N.species.size)
+    {
+      Pos.Diag.fn(MODEL=Store.size[[i]]$Fit,M=1)
+      mtext(names(TARGETS)[i],4,las=3,line=1,cex=.6)
+    }
+    dev.off()
     
-    #at least 5 observations per year
-    dat=subset(dat,year%in%as.numeric(names(yr.tabl[yr.tabl>=5])))
+    #Predict year, lat and depth effects
+    PRED.size=vector('list',length(Species.cpue))
+    names(PRED.size)=names(DATA.list)
+    PRED.lat.size=PRED.z.size=PRED.size
+    for(i in Species.cpue)
+    {
+      PRED.size[[i]]=Store.size[[i]]$year.pred
+      if(!is.null(Store.size[[i]]$Lat.pred))PRED.lat.size[[i]]=Store.size[[i]]$Lat.pred
+      if(!is.null(Store.size[[i]]$Depth.pred))PRED.z.size[[i]]=Store.size[[i]]$Depth.pred
+    }
     
-    dat$year=factor(dat$year,levels=sort(unique(dat$year)))
-    dat$SEX=as.factor(dat$SEX)
-    
-    dat$Mid.Lat=abs(dat$Mid.Lat)
-    dat$log.BOTDEPTH=log(dat$BOTDEPTH)
-    dat$log.Mid.Lat=log(dat$Mid.Lat)
-    
-    Store.size[[i]]=Size.fun(dat,FORMULA=BEST.model.size[[i]])
-  }
-    
-  #Goodness of fit 
-  Pos.Diag.fn=function(MODEL,M=1)   #function for fit diagnostics
-  {
-    RES=MODEL$residuals   #residuals
-    Std.RES=RES/sd(RES)   #standardised residuals (res/SD(res))
-    PRED=predict(MODEL)
-    
-    qqnorm(RES,main="",ylab="",xlab="")
-    qqline(RES, col = 'grey40',lwd=1.5,lty=2)
-    #mtext(SPECIES,3,outer=F,line=0.25,cex=1.3)
-    if(i==4) mtext("Residuals",2,outer=F,line=1.3,las=3,cex=M)
-    # mtext("                        Theoretical quantiles",1,outer=F,line=1.5,cex=M)
-    
-    hist(Std.RES,xlim=c(-5,5),ylab="",xlab="",main="",col="grey",breaks=50)
-    box()
-    if(i==4)  mtext("Frequency",2,outer=F,line=1.3,las=3,cex=M)
-    #mtext("                      Standardised residuals",1,outer=F,line=1.5,cex=M)
-    
-    plot(PRED,Std.RES,ylab="",xlab="",ylim=c(-5,5))
-    abline(0,0,lwd=1.5,lty=2,col='grey40')
-    if(i==4)  mtext("Standardised residuals",2,outer=F,line=1.3,las=3,cex=M)
-    #mtext("                         Fitted values",1,outer=F,line=1.5,cex=M)
-    
-  }
-  hndl.fit.size=handl_OneDrive("Analyses/Surveys/Naturaliste_longline/outputs/Size/")
-  fn.fig(paste(hndl.fit.size,"fit.diagnostics",sep=""),1600,2400)
-  par(mfrow=c(N.species.size,3),mar=c(2,2,1.5,1),oma=c(1,1.5,.1,2),mgp=c(2,.7,0))
-  for(i in 1:N.species.size)
-  {
-    Pos.Diag.fn(MODEL=Store.size[[i]]$Fit,M=1)
-    mtext(names(TARGETS)[i],4,las=3,line=1,cex=.6)
-  }
-  dev.off()
-
-  #Predict year, lat and depth effects
-  PRED.size=vector('list',length(Species.cpue))
-  names(PRED.size)=names(DATA.list)
-  PRED.lat.size=PRED.z.size=PRED.size
-  for(i in Species.cpue)
-  {
-    PRED.size[[i]]=Store.size[[i]]$year.pred
-    if(!is.null(Store.size[[i]]$Lat.pred))PRED.lat.size[[i]]=Store.size[[i]]$Lat.pred
-    if(!is.null(Store.size[[i]]$Depth.pred))PRED.z.size[[i]]=Store.size[[i]]$Depth.pred
   }
 }
 
@@ -5895,58 +6086,90 @@ if(Do.abundance=="YES")
   }
   
    
-  #4. Effect of time on abundance  
-  INDEX=PRED.CPUE
-  Plus=0.3
-  INDEX.absolute=INDEX.nominal=INDEX
-  for(i in Species.cpue)
+  #4. Annual on abundance  
+  if(do.GAM=="YES" | do.GLM=='YES')
   {
-    Nml=Nom.dummy.w[[i]]%>%filter(method=='DLnMean')%>%
-      rename(year=season,low95=lowCL,up95= uppCL)
-    dummy=PRED.CPUE[[i]]
-    #names(dummy)[5:6]=c("lower.CL","upper.CL")
-    dummy$yr=dummy$year
-    id=match("response",names(dummy))
-    if(length(id)>0) names(dummy)[id]="emmean"
-    dummy$MEAN=dummy$emmean
-    dummy$UP=dummy$upper.CL
-    dummy$LOW=dummy$lower.CL
-    dummy$CV=dummy$SE/dummy$MEAN
+    INDEX=PRED.CPUE
+    Plus=0.3
+    INDEX.absolute=INDEX.nominal=INDEX
+    for(i in Species.cpue)
+    {
+      Nml=Nom.dummy.w[[i]]%>%filter(method=='DLnMean')%>%
+        rename(year=season,low95=lowCL,up95= uppCL)
+      dummy=PRED.CPUE[[i]]
+      #names(dummy)[5:6]=c("lower.CL","upper.CL")
+      dummy$yr=dummy$year
+      id=match("response",names(dummy))
+      if(length(id)>0) names(dummy)[id]="emmean"
+      dummy$MEAN=dummy$emmean
+      dummy$UP=dummy$upper.CL
+      dummy$LOW=dummy$lower.CL
+      dummy$CV=dummy$SE/dummy$MEAN
+      
+      fn.fig(paste0(hndLs,'Stand vs nominal/',Tar.names[i]),2000,2000)  
+      MaX=max(c(dummy$UP,Nml$up95),na.rm=T)
+      
+      INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,
+                                  YLIM=c(0,MaX),XLIM=LimX,Type="points",pLOT=FALSE)
+      INDEX.absolute[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="NO",REV="NO",n.seq=5,
+                                           YLIM=c(0,MaX),XLIM=LimX,Type="points",pLOT=TRUE)
+      
+      #add nominal  
+      INDEX.nominal[[i]]=Nom.dummy.w[[i]]%>%
+        rename(yr=season,
+               MeAn=mean,
+               UppCI=uppCL,
+               LowCI=lowCL,
+               CV=CV,
+               SE=SE)
+      
+      with(Nml,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
+      suppressWarnings(with(Nml,arrows(x0=year+Plus, y0=low95,x1=year+Plus, y1=up95, 
+                                       code=3, angle=90, length=0.025, col="grey70")))
+      legend('topleft',c('stand','non-stand'),pch=19,col=c('black','grey70'),bty='n')
+      dev.off()
+    }
     
-    fn.fig(paste0(hndLs,'Stand vs nominal/',Tar.names[i]),2000,2000)  
-    MaX=max(c(dummy$UP,Nml$up95),na.rm=T)
-    
-    INDEX[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=5,
-                                YLIM=c(0,MaX),XLIM=LimX,Type="points",pLOT=FALSE)
-    INDEX.absolute[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="NO",REV="NO",n.seq=5,
-                                         YLIM=c(0,MaX),XLIM=LimX,Type="points",pLOT=TRUE)
-    
-    #add nominal  
-    INDEX.nominal[[i]]=Nom.dummy.w[[i]]%>%
-                        rename(yr=season,
-                               MeAn=mean,
-                               UppCI=uppCL,
-                               LowCI=lowCL,
-                               CV=CV,
-                               SE=SE)
-
-    with(Nml,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
-    suppressWarnings(with(Nml,arrows(x0=year+Plus, y0=low95,x1=year+Plus, y1=up95, 
-                                     code=3, angle=90, length=0.025, col="grey70")))
-    legend('topleft',c('stand','non-stand'),pch=19,col=c('black','grey70'),bty='n')
-    dev.off()
   }
 
   #5. Export abundance index for population dynamics modelling (SS3)   
   hnd.indx=handl_OneDrive("Analyses/Data_outs/")
-  #stand
-  for(i in 1:length(INDEX.absolute)) write.csv(INDEX.absolute[[i]],paste(hnd.indx,names(INDEX)[i],'/',names(INDEX)[i],".Srvy.FixSt.csv",sep=""),row.names=F)
-  for(i in 1:length(INDEX)) write.csv(INDEX[[i]],paste(hnd.indx,names(INDEX)[i],'/',names(INDEX)[i],".Srvy.FixSt_relative.csv",sep=""),row.names=F)
   
-  #nominal
-  for(i in 1:length(INDEX.nominal)) write.csv(INDEX.nominal[[i]],paste(hnd.indx,names(INDEX.nominal)[i],'/',names(INDEX.nominal)[i],".Srvy.FixSt_nominal.csv",sep=""),row.names=F)
-  
-  
+  if(do.sdmTMB=="YES")  
+  {
+    #stand
+    for(i in 1:length(Store))
+    {
+      d=Store[[i]]$year.pred%>%
+                  rename(yr=year,
+                         MeAn=response,
+                         UppCI=upper.CL,
+                         LowCI=lower.CL,
+                         SE= se_avg)%>%   #ACA. Check that SE is the right SE...seems to big!!!
+                  mutate(CV=SE/MeAn)%>%
+                  dplyr::select(yr,MeAn,UppCI,LowCI,CV,SE)
+      d.rel=d%>%
+        mutate(UppCI=UppCI/mean(MeAn,na.rm=T),
+               LowCI=LowCI/mean(MeAn,na.rm=T),
+               MeAn=MeAn/mean(MeAn,na.rm=T))
+          
+        
+      write.csv(d,paste(hnd.indx,names(Store)[i],'/',names(Store)[i],".Srvy.FixSt.csv",sep=""),row.names=F)
+      write.csv(d.rel,paste(hnd.indx,names(Store)[i],'/',names(Store)[i],".Srvy.FixSt_relative.csv",sep=""),row.names=F)
+      
+    }
+  }
+  if(do.GAM=="YES" | do.GLM=='YES')
+  {
+    #stand
+    for(i in 1:length(INDEX.absolute)) write.csv(INDEX.absolute[[i]],paste(hnd.indx,names(INDEX)[i],'/',names(INDEX)[i],".Srvy.FixSt.csv",sep=""),row.names=F)
+    for(i in 1:length(INDEX)) write.csv(INDEX[[i]],paste(hnd.indx,names(INDEX)[i],'/',names(INDEX)[i],".Srvy.FixSt_relative.csv",sep=""),row.names=F)
+    
+    #nominal
+    for(i in 1:length(INDEX.nominal)) write.csv(INDEX.nominal[[i]],paste(hnd.indx,names(INDEX.nominal)[i],'/',names(INDEX.nominal)[i],".Srvy.FixSt_nominal.csv",sep=""),row.names=F)
+    
+  }
+   
   
   #6. create dusky and sandbar figures for RAR
   do.dis=FALSE
@@ -5989,40 +6212,44 @@ if(Do.abundance=="YES")
   
   
   #7. Effect of time on size
-  #fixed stations 
-  INDEX.size=INDEX.size.absolute=PRED.size
-   for(i in 1:N.species.size)
+  if(do.GAM=="YES" | do.GLM=='YES')
   {
-    dummy=PRED.size[[i]]
-    #names(dummy)[5:6]=c("lower.CL","upper.CL")
-    dummy$yr=dummy$Mid.Lat
-    dummy$MEAN=dummy$emmean
-    dummy$UP=dummy$upper.CL
-    dummy$LOW=dummy$lower.CL
-    dummy$CV=100*dummy$SE/dummy$MEAN
-    INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points")
-    INDEX.size.absolute[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="NO",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points",pLOT=FALSE) 
+    #fixed stations 
+    INDEX.size=INDEX.size.absolute=PRED.size
+    for(i in 1:N.species.size)
+    {
+      dummy=PRED.size[[i]]
+      #names(dummy)[5:6]=c("lower.CL","upper.CL")
+      dummy$yr=dummy$Mid.Lat
+      dummy$MEAN=dummy$emmean
+      dummy$UP=dummy$upper.CL
+      dummy$LOW=dummy$lower.CL
+      dummy$CV=100*dummy$SE/dummy$MEAN
+      INDEX.size[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="YES",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points")
+      INDEX.size.absolute[[i]]=fun.plot.yr.pred(dummy,X="year",normalised="NO",REV="NO",n.seq=2,YLIM=NULL,XLIM=LimX,Type="points",pLOT=FALSE) 
+      
+      
+      #add observed mean size and size at maturity
+      par(new = T)
+      Nml.size=fn.nmnl.size(dat=Store.size[[i]]$DAT,REL="NO")
+      with(Nml.size,plot(year+Plus, mean, pch=16, cex=1.25, col="grey70",axes=F,
+                         xlab=NA, ylab=NA,ylim=c(0,max(Nml.size$uppCL,na.rm=T)),xlim=LimX))
+      # with(Nml.size,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
+      suppressWarnings(with(Nml.size,arrows(x0=year+Plus, y0=lowCL,x1=year+Plus, y1=uppCL, 
+                                            code=3, angle=90, length=0.025, col="grey70")))
+      axis(side = 4,cex.axis=1.25)
+      abline(h=Fem.Size.Mat[[match(TARGETS.name[i],names(Fem.Size.Mat))]],col="grey40",lwd=1.5,lty=3)   
+      
+      
+      mtext(names(PRED.z.size)[i],3,line=.05,cex=1.1)
+    }
     
-
-    #add observed mean size and size at maturity
-    par(new = T)
-    Nml.size=fn.nmnl.size(dat=Store.size[[i]]$DAT,REL="NO")
-    with(Nml.size,plot(year+Plus, mean, pch=16, cex=1.25, col="grey70",axes=F,
-                       xlab=NA, ylab=NA,ylim=c(0,max(Nml.size$uppCL,na.rm=T)),xlim=LimX))
-    # with(Nml.size,points(year+Plus, mean, pch=16, cex=1.25, col="grey70"))
-    suppressWarnings(with(Nml.size,arrows(x0=year+Plus, y0=lowCL,x1=year+Plus, y1=uppCL, 
-                                          code=3, angle=90, length=0.025, col="grey70")))
-    axis(side = 4,cex.axis=1.25)
-    abline(h=Fem.Size.Mat[[match(TARGETS.name[i],names(Fem.Size.Mat))]],col="grey40",lwd=1.5,lty=3)   
-    
-    
-    mtext(names(PRED.z.size)[i],3,line=.05,cex=1.1)
-  }
- 
-  #8. Export size index   
+    #8. Export size index   
     #Fixed stations
-  for(i in 1:length(INDEX.size)) write.csv(INDEX.size[[i]],paste(hnd.indx,names(INDEX.size)[i],'/',names(INDEX.size)[i],".Srvy.FixSt_size.csv",sep=""),row.names=F)
-  for(i in 1:length(INDEX.size.absolute)) write.csv(INDEX.size.absolute[[i]],paste(hnd.indx,names(INDEX.size)[i],'/',names(INDEX.size)[i],".Srvy.FixSt_size.absolute.csv",sep=""),row.names=F)
+    for(i in 1:length(INDEX.size)) write.csv(INDEX.size[[i]],paste(hnd.indx,names(INDEX.size)[i],'/',names(INDEX.size)[i],".Srvy.FixSt_size.csv",sep=""),row.names=F)
+    for(i in 1:length(INDEX.size.absolute)) write.csv(INDEX.size.absolute[[i]],paste(hnd.indx,names(INDEX.size)[i],'/',names(INDEX.size)[i],".Srvy.FixSt_size.absolute.csv",sep=""),row.names=F)
+    
+  }
   
 
   #9. create dusky and sandbar figures for RAR
@@ -6049,6 +6276,7 @@ if(Do.abundance=="YES")
     dev.off()
     
   }
+  
   
   #10. Export size raw data  for population dynamics modelling (SS3)  
   for(i in 1:length(TARGETS))
